@@ -1,0 +1,5 @@
+# Streamlit Community Cloud looks for `requirements.txt` in the repo root.
+#
+# Keep dashboard deps separate, but install them via this root file.
+-r requirements_dashboard.txt
+

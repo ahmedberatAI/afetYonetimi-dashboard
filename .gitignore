@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Large/raw datasets (do not push to GitHub)
+deprem.csv
+data/processed/
+models/
+
+# Labeling/modeling artifacts (keep local unless you explicitly want them in the repo)
+data/labeling/
+data/modeling/
+
+# Streamlit
+.streamlit/secrets.toml
+

@@ -1,0 +1,9 @@
+# Minimal dependencies for the Streamlit dashboard.
+#
+# Install (local):
+#   pip install -r requirements_dashboard.txt
+
+streamlit
+pandas
+numpy
+pydeck
