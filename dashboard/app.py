@@ -266,7 +266,7 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
     if "timeline_loop" not in st.session_state:
         st.session_state["timeline_loop"] = True
     if "timeline_show_heatmap" not in st.session_state:
-        st.session_state["timeline_show_heatmap"] = True
+        st.session_state["timeline_show_heatmap"] = False
     if "timeline_pending_hour" in st.session_state:
         pending = st.session_state.pop("timeline_pending_hour")
         if pending in hour_values:
@@ -441,15 +441,15 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
             return "Orta"
         return "Izleme"
 
+    # Quantile-based colors avoid outlier washout and keep low signals visible.
     def _signal_color(v: float) -> list[int]:
-        ratio = (v / max_signal) if max_signal > 0 else 0.0
-        if ratio >= 0.85:
-            return [177, 18, 38, 220]
-        if ratio >= 0.60:
-            return [239, 59, 44, 205]
-        if ratio >= 0.35:
-            return [252, 141, 89, 190]
-        return [255, 237, 160, 170]
+        if v >= q95:
+            return [127, 0, 0, 240]
+        if v >= q80:
+            return [203, 24, 29, 232]
+        if v >= q50:
+            return [239, 59, 44, 224]
+        return [253, 141, 60, 216]
 
     agg["severity"] = agg["signal"].apply(_severity)
     agg["fill_color"] = agg["signal"].apply(_signal_color)
@@ -514,8 +514,8 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
 
     c_map1, c_map2 = st.columns([1.7, 1.0], gap="large")
     with c_map1:
-        radius_scale = st.slider("Nokta boyutu carpani", min_value=500, max_value=22000, value=4500, step=500)
-        agg["radius"] = (np.sqrt(agg["signal"].clip(lower=0.0)) * float(radius_scale)).clip(lower=550.0)
+        radius_scale = st.slider("Nokta boyutu carpani", min_value=500, max_value=22000, value=6500, step=500)
+        agg["radius"] = (np.sqrt(agg["signal"].clip(lower=0.0)) * float(radius_scale)).clip(lower=1000.0)
 
         center_lat = float(agg["lat"].mean())
         center_lon = float(agg["lon"].mean())
@@ -528,7 +528,7 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
         }
 
         layers: list[pdk.Layer] = []
-        if bool(st.session_state.get("timeline_show_heatmap", True)):
+        if bool(st.session_state.get("timeline_show_heatmap", False)):
             layers.append(
                 pdk.Layer(
                     "HeatmapLayer",
@@ -537,8 +537,8 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
                     get_weight="signal",
                     radius_pixels=75,
                     intensity=1.2,
-                    threshold=0.1,
-                    opacity=0.55,
+                    threshold=0.03,
+                    opacity=0.38,
                 )
             )
         layers.append(
@@ -548,8 +548,9 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
                 get_position="[lon, lat]",
                 get_radius="radius",
                 get_fill_color="fill_color",
-                get_line_color=[90, 30, 30, 220],
+                get_line_color=[35, 10, 10, 235],
                 line_width_min_pixels=1,
+                radius_min_pixels=4,
                 pickable=True,
                 stroked=True,
             )
@@ -570,7 +571,7 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
     with c_map2:
         top_n_max = int(min(30, len(agg)))
         top_n_default = int(min(10, len(agg)))
-        top_n = st.slider("Sicak nokta listesi", min_value=5, max_value=max(5, top_n_max), value=max(5, top_n_default), step=1)
+        top_n = st.slider("Sicak nokta listesi", min_value=1, max_value=max(1, top_n_max), value=max(1, top_n_default), step=1)
         top_df = agg.head(top_n).copy()
         top_df["signal"] = top_df["signal"].round(0).astype(int)
         top_df["pay"] = top_df["share_pct"].map(lambda x: f"{x:.1f}%")
