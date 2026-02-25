@@ -217,32 +217,56 @@ def _province_map_df(df: pd.DataFrame) -> pd.DataFrame:
 def _hourly_signal_map(df: pd.DataFrame) -> None:
     st.subheader("Saatlik Yardim Sinyalleri (Harita)")
 
+    st.markdown(
+        """
+        <style>
+        .signal-hero {
+            background: linear-gradient(120deg, rgba(12,74,110,0.92) 0%, rgba(30,64,175,0.88) 45%, rgba(15,23,42,0.94) 100%);
+            border: 1px solid rgba(148, 163, 184, 0.45);
+            border-radius: 14px;
+            padding: 14px 18px;
+            margin: 0.35rem 0 0.85rem 0;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.25);
+        }
+        .signal-hero-title {
+            color: #f8fafc;
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+        }
+        .signal-hero-sub {
+            color: #dbeafe;
+            font-size: 0.91rem;
+            margin-top: 0.25rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     if "created_at_local" not in df.columns or df["created_at_local"].isna().all():
         st.info("created_at bilgisi yok; saatlik harita olusturulamadi.")
         return
 
-    # Hour list for playback.
-    # NOTE: use "h" (not "H") to avoid pandas deprecation warnings.
     hours = pd.to_datetime(df["created_at_local"], errors="coerce").dt.floor("h")
     try:
         hours = hours.dt.tz_localize(None)
     except Exception:
         pass
 
-    # Do NOT use numpy datetime64 `.tolist()` here: it becomes int nanoseconds and breaks strftime.
     hour_values = sorted(pd.DatetimeIndex(hours.dropna().unique()).to_pydatetime().tolist())
     if not hour_values:
         st.info("Saat bilgisi bulunamadi.")
         return
 
-    # Playback state (persistent across reruns)
     if "timeline_playing" not in st.session_state:
         st.session_state["timeline_playing"] = False
     if "timeline_interval_s" not in st.session_state:
         st.session_state["timeline_interval_s"] = 0.8
     if "timeline_loop" not in st.session_state:
         st.session_state["timeline_loop"] = True
-    # If playback scheduled a "pending" hour, apply it BEFORE widget instantiation.
+    if "timeline_show_heatmap" not in st.session_state:
+        st.session_state["timeline_show_heatmap"] = True
     if "timeline_pending_hour" in st.session_state:
         pending = st.session_state.pop("timeline_pending_hour")
         if pending in hour_values:
@@ -251,8 +275,7 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
     if "timeline_hour" not in st.session_state or st.session_state["timeline_hour"] not in hour_values:
         st.session_state["timeline_hour"] = hour_values[0]
 
-    # Controls
-    c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
+    c1, c2, c3, c4, c5 = st.columns([2.2, 2.2, 1.7, 1.2, 1.5])
     with c1:
         loc_level = st.selectbox("Konum seviyesi", options=["neighborhood", "district", "province"], index=0)
     with c2:
@@ -277,6 +300,36 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
         )
     with c4:
         st.checkbox("Loop", value=bool(st.session_state["timeline_loop"]), key="timeline_loop")
+    with c5:
+        st.checkbox("Heatmap", value=bool(st.session_state["timeline_show_heatmap"]), key="timeline_show_heatmap")
+
+    if loc_level == "province":
+        group_cols = ["province"]
+    elif loc_level == "district":
+        group_cols = ["province", "district"]
+    else:
+        group_cols = ["province", "district", "neighborhood"]
+
+    missing_group = [c for c in group_cols if c not in df.columns]
+    if missing_group:
+        st.info(f"Konum alanlari eksik: {', '.join(missing_group)}")
+        return
+
+    df_hourly = df.copy()
+    df_hourly["_hour"] = hours
+
+    def _aggregate(frame: pd.DataFrame) -> pd.DataFrame:
+        if frame.empty:
+            return pd.DataFrame(columns=group_cols + ["signal"])
+
+        if signal_mode == "count_any_need" and "pred_any_need" in frame.columns:
+            frame = frame[pd.to_numeric(frame["pred_any_need"], errors="coerce").fillna(0).astype(int) == 1]
+        if frame.empty:
+            return pd.DataFrame(columns=group_cols + ["signal"])
+
+        if signal_mode == "sum_urgency" and "urgency_score" in frame.columns:
+            return frame.groupby(group_cols, dropna=False)["urgency_score"].sum().reset_index(name="signal")
+        return frame.groupby(group_cols, dropna=False).size().reset_index(name="signal")
 
     b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
     try:
@@ -303,7 +356,6 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
     with b4:
         st.caption(f"Hours: {len(hour_values)}")
 
-    # Hour selector (synced with session_state so playback can move it)
     st.select_slider(
         "Saat sec (hour-by-hour)",
         options=hour_values,
@@ -312,42 +364,22 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
     )
     selected_hour = st.session_state["timeline_hour"]
 
-    # Compute hour column aligned with slider.
-    df2 = df.copy()
-    df2["_hour"] = hours
-    df2 = df2[df2["_hour"] == selected_hour]
-
+    df2 = df_hourly[df_hourly["_hour"] == selected_hour]
     if df2.empty:
         st.info("Bu saatte filtreye uyan veri yok.")
         return
 
-    if signal_mode == "count_any_need" and "pred_any_need" in df2.columns:
-        df2 = df2[pd.to_numeric(df2["pred_any_need"], errors="coerce").fillna(0).astype(int) == 1]
-    if df2.empty:
-        st.info("Bu saatte (pred_any_need=1) sinyal yok.")
+    agg = _aggregate(df2)
+    if agg.empty:
+        if signal_mode == "count_any_need":
+            st.info("Bu saatte (pred_any_need=1) sinyal yok.")
+        else:
+            st.info("Bu saatte sinyal yok.")
         return
 
-    # Aggregate signals per location.
-    if loc_level == "province":
-        group_cols = ["province"]
-    elif loc_level == "district":
-        group_cols = ["province", "district"]
-    else:
-        group_cols = ["province", "district", "neighborhood"]
-
-    if signal_mode == "sum_urgency" and "urgency_score" in df2.columns:
-        agg = df2.groupby(group_cols, dropna=False)["urgency_score"].sum().reset_index(name="signal")
-    else:
-        agg = df2.groupby(group_cols, dropna=False).size().reset_index(name="signal")
-
-    # Attach coordinates from gazetteer centroids (fallback to built-in province centroids).
     neigh_ix, dist_ix, prov_ix = load_location_index()
 
-    # Normalize neighborhood join key (dataset has `neighborhood`, gazetteer has `neighborhood_clean`).
     if loc_level == "neighborhood":
-        if "neighborhood" not in agg.columns:
-            st.info("neighborhood kolonu yok; mahalle bazli harita olusturulamadi.")
-            return
         agg["neighborhood_clean"] = agg["neighborhood"].astype("string").fillna("").str.strip().str.lower()
         agg = agg[agg["neighborhood_clean"] != ""].reset_index(drop=True)
 
@@ -359,7 +391,6 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
         agg["lat"] = agg["lat"].fillna(agg.get("lat_dist")).fillna(agg.get("lat_prov"))
         agg["lon"] = agg["lon"].fillna(agg.get("lon_dist")).fillna(agg.get("lon_prov"))
         agg = agg.drop(columns=["lat_dist", "lon_dist", "lat_prov", "lon_prov"], errors="ignore")
-
     elif loc_level == "district":
         dist_ix = dist_ix.rename(columns={"lat": "lat_dist", "lon": "lon_dist"})
         prov_ix = prov_ix.rename(columns={"lat": "lat_prov", "lon": "lon_prov"})
@@ -368,11 +399,9 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
         agg["lat"] = agg["lat_dist"].fillna(agg.get("lat_prov"))
         agg["lon"] = agg["lon_dist"].fillna(agg.get("lon_prov"))
         agg = agg.drop(columns=["lat_dist", "lon_dist", "lat_prov", "lon_prov"], errors="ignore")
-
     else:
         agg = agg.merge(prov_ix, on=["province"], how="left")
 
-    # Fall back to hardcoded province centroids (prototype) when still missing.
     if "province" in agg.columns:
         missing = agg["lat"].isna() | agg["lon"].isna()
         if bool(missing.any()):
@@ -383,51 +412,202 @@ def _hourly_signal_map(df: pd.DataFrame) -> None:
                     agg.at[i, "lat"] = lat
                     agg.at[i, "lon"] = lon
 
+    total_hotspots_before_geo = len(agg)
     agg = agg.dropna(subset=["lat", "lon"]).reset_index(drop=True)
     if agg.empty:
         st.info("Harita icin koordinat eslesmesi bulunamadi (gazetteer yok veya eslesme dusuk).")
         return
 
-    # Visual scale: sqrt makes dense hours readable.
-    radius_scale = st.slider("Nokta boyutu carpani", min_value=500, max_value=20000, value=4000, step=500)
-    agg["radius"] = (np.sqrt(agg["signal"].astype(float).clip(lower=0.0)) * float(radius_scale)).clip(lower=500.0)
+    agg["signal"] = pd.to_numeric(agg["signal"], errors="coerce").fillna(0.0)
+    agg = agg[agg["signal"] > 0].sort_values("signal", ascending=False).reset_index(drop=True)
+    if agg.empty:
+        st.info("Haritada gosterilecek pozitif sinyal bulunamadi.")
+        return
 
-    loc_text = "{province}"
-    if loc_level in ("district", "neighborhood"):
-        loc_text += " / {district}"
-    if loc_level == "neighborhood":
-        loc_text += " / {neighborhood}"
+    max_signal = float(agg["signal"].max())
+    total_signal = float(agg["signal"].sum())
+    agg["rank"] = np.arange(1, len(agg) + 1)
+    agg["share_pct"] = np.where(total_signal > 0, (agg["signal"] / total_signal) * 100.0, 0.0)
+    q50 = float(agg["signal"].quantile(0.50))
+    q80 = float(agg["signal"].quantile(0.80))
+    q95 = float(agg["signal"].quantile(0.95))
 
-    tooltip = {"text": loc_text + "\\nSaat: " + selected_hour.strftime("%Y-%m-%d %H:00") + "\\nSinyal: {signal}"}
+    def _severity(v: float) -> str:
+        if v >= q95:
+            return "Kritik"
+        if v >= q80:
+            return "Yuksek"
+        if v >= q50:
+            return "Orta"
+        return "Izleme"
 
-    center_lat = float(agg["lat"].mean())
-    center_lon = float(agg["lon"].mean())
+    def _signal_color(v: float) -> list[int]:
+        ratio = (v / max_signal) if max_signal > 0 else 0.0
+        if ratio >= 0.85:
+            return [177, 18, 38, 220]
+        if ratio >= 0.60:
+            return [239, 59, 44, 205]
+        if ratio >= 0.35:
+            return [252, 141, 89, 190]
+        return [255, 237, 160, 170]
 
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=agg,
-        get_position="[lon, lat]",
-        get_radius="radius",
-        get_fill_color=[220, 0, 0, 140],
-        get_line_color=[120, 0, 0, 200],
-        line_width_min_pixels=1,
-        pickable=True,
+    agg["severity"] = agg["signal"].apply(_severity)
+    agg["fill_color"] = agg["signal"].apply(_signal_color)
+
+    if loc_level == "province":
+        agg["location_label"] = agg["province"].astype("string").fillna("").str.strip()
+    elif loc_level == "district":
+        agg["location_label"] = (
+            agg["province"].astype("string").fillna("").str.strip()
+            + " / "
+            + agg["district"].astype("string").fillna("").str.strip()
+        )
+    else:
+        agg["location_label"] = (
+            agg["province"].astype("string").fillna("").str.strip()
+            + " / "
+            + agg["district"].astype("string").fillna("").str.strip()
+            + " / "
+            + agg["neighborhood"].astype("string").fillna("").str.strip()
+        )
+    agg["share_pct_rounded"] = agg["share_pct"].round(1)
+
+    prev_total_signal = None
+    prev_hotspots = None
+    if cur_idx > 0:
+        prev_hour = hour_values[cur_idx - 1]
+        prev_agg = _aggregate(df_hourly[df_hourly["_hour"] == prev_hour])
+        if not prev_agg.empty:
+            prev_agg["signal"] = pd.to_numeric(prev_agg["signal"], errors="coerce").fillna(0.0)
+            prev_total_signal = float(prev_agg["signal"].sum())
+            prev_hotspots = int((prev_agg["signal"] > 0).sum())
+
+    def _delta_text(curr: float, prev: float | None, decimals: int = 0) -> str | None:
+        if prev is None:
+            return None
+        diff = curr - prev
+        if prev == 0:
+            return f"{diff:+.{decimals}f} (onceki saat 0)"
+        pct = (diff / prev) * 100.0
+        return f"{diff:+.{decimals}f} ({pct:+.1f}%)"
+
+    top_location = str(agg.iloc[0]["location_label"])
+    top_signal = float(agg.iloc[0]["signal"])
+    st.markdown(
+        f"""
+        <div class="signal-hero">
+            <div class="signal-hero-title">Saatlik Ihtiyac Sinyalleri Analizi</div>
+            <div class="signal-hero-sub">
+                Saat: {selected_hour.strftime("%Y-%m-%d %H:00")} | En kritik nokta: {top_location} (sinyal: {top_signal:.0f})
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    deck = pdk.Deck(
-        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-        initial_view_state=pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=6, pitch=0),
-        layers=[layer],
-        tooltip=tooltip,
-    )
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Toplam sinyal", f"{int(total_signal):,}", delta=_delta_text(total_signal, prev_total_signal, 0))
+    m2.metric("Sicak nokta", f"{int(len(agg)):,}", delta=_delta_text(float(len(agg)), float(prev_hotspots) if prev_hotspots is not None else None, 0))
+    m3.metric("Tepe sinyal", f"{top_signal:.0f}")
+    geo_match = (len(agg) / total_hotspots_before_geo) * 100.0 if total_hotspots_before_geo else 0.0
+    m4.metric("Koordinat kapsami", f"{geo_match:.1f}%")
 
-    st.pydeck_chart(deck, use_container_width=True)
-    st.caption("Not: Bu harita, saatlik sinyalleri (filtrelenmis veri) il/ilce centroid'leri uzerinden gosterir.")
+    c_map1, c_map2 = st.columns([1.7, 1.0], gap="large")
+    with c_map1:
+        radius_scale = st.slider("Nokta boyutu carpani", min_value=500, max_value=22000, value=4500, step=500)
+        agg["radius"] = (np.sqrt(agg["signal"].clip(lower=0.0)) * float(radius_scale)).clip(lower=550.0)
 
-    with st.expander("Saatlik sinyal tablosu"):
-        st.dataframe(agg.sort_values("signal", ascending=False), use_container_width=True, hide_index=True)
+        center_lat = float(agg["lat"].mean())
+        center_lon = float(agg["lon"].mean())
+        tooltip = {
+            "html": (
+                "<b>{location_label}</b><br/>"
+                + f"Saat: {selected_hour.strftime('%Y-%m-%d %H:00')}<br/>"
+                + "Sinyal: {signal}<br/>Pay: {share_pct_rounded}%<br/>Seviye: {severity}"
+            )
+        }
 
-    # Auto-play: schedule the next hour (do NOT mutate the widget key after instantiation).
+        layers: list[pdk.Layer] = []
+        if bool(st.session_state.get("timeline_show_heatmap", True)):
+            layers.append(
+                pdk.Layer(
+                    "HeatmapLayer",
+                    data=agg,
+                    get_position="[lon, lat]",
+                    get_weight="signal",
+                    radius_pixels=75,
+                    intensity=1.2,
+                    threshold=0.1,
+                    opacity=0.55,
+                )
+            )
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=agg,
+                get_position="[lon, lat]",
+                get_radius="radius",
+                get_fill_color="fill_color",
+                get_line_color=[90, 30, 30, 220],
+                line_width_min_pixels=1,
+                pickable=True,
+                stroked=True,
+            )
+        )
+
+        zoom_map = 6.4 if loc_level == "neighborhood" else (6.0 if loc_level == "district" else 5.6)
+        deck = pdk.Deck(
+            map_style="https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
+            initial_view_state=pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=zoom_map, pitch=22),
+            layers=layers,
+            tooltip=tooltip,
+        )
+        st.pydeck_chart(deck, use_container_width=True)
+        st.caption(
+            "Gosterim; secili saatteki sinyal yogunlugunu (renk), buyuklugunu (cap) ve hotspot oncelik seviyesini birlikte sunar."
+        )
+
+    with c_map2:
+        top_n_max = int(min(30, len(agg)))
+        top_n_default = int(min(10, len(agg)))
+        top_n = st.slider("Sicak nokta listesi", min_value=5, max_value=max(5, top_n_max), value=max(5, top_n_default), step=1)
+        top_df = agg.head(top_n).copy()
+        top_df["signal"] = top_df["signal"].round(0).astype(int)
+        top_df["pay"] = top_df["share_pct"].map(lambda x: f"{x:.1f}%")
+        st.dataframe(
+            top_df[["rank", "location_label", "signal", "pay", "severity"]].rename(
+                columns={
+                    "rank": "Sira",
+                    "location_label": "Konum",
+                    "signal": "Sinyal",
+                    "pay": "Pay",
+                    "severity": "Seviye",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        bar_df = top_df[["location_label", "signal"]].set_index("location_label")
+        st.bar_chart(bar_df)
+
+        label_rows = []
+        for lab in LABELS:
+            col = f"pred_{lab}"
+            if col in df2.columns:
+                cnt = int(pd.to_numeric(df2[col], errors="coerce").fillna(0).astype(int).sum())
+                if cnt > 0:
+                    label_rows.append({"label": lab, "count": cnt})
+        if label_rows:
+            lbl_df = pd.DataFrame(label_rows).sort_values("count", ascending=False).head(6)
+            st.caption("Saatlik ihtiyac etiketleri")
+            st.dataframe(lbl_df, use_container_width=True, hide_index=True)
+
+    with st.expander("Saatlik sinyal tablosu (detayli)"):
+        view_cols = ["rank", "location_label", "signal", "share_pct", "severity", "lat", "lon"]
+        show_df = agg[view_cols].copy()
+        show_df["share_pct"] = show_df["share_pct"].map(lambda x: round(float(x), 2))
+        st.dataframe(show_df, use_container_width=True, hide_index=True)
+
     if bool(st.session_state.get("timeline_playing", False)) and len(hour_values) > 1:
         interval_s = float(st.session_state.get("timeline_interval_s", 0.8))
         interval_s = max(0.05, min(interval_s, 30.0))
