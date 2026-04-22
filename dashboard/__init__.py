@@ -1,0 +1,1 @@
+"""AfetYonetimi dashboard package."""
