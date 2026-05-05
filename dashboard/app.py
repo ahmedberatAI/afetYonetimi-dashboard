@@ -2,6 +2,7 @@ import base64
 import datetime as dt
 import html
 import io
+import sys
 import time
 from pathlib import Path
 
@@ -9,6 +10,13 @@ import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+
+# Streamlit Cloud / `streamlit run dashboard/app.py` ile calistirildiginda
+# `dashboard/` klasoru sys.path'e eklenir ama repo koku eklenmez. Boylece
+# `from dashboard.utils import ...` ImportError verir. Repo kokunu manuel ekle.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 try:
     import plotly.express as px
@@ -25,24 +33,44 @@ try:
 except Exception:
     QRCODE_AVAILABLE = False
 
-from dashboard.utils import (
-    PredictionSchema,
-    PROVINCE_CENTROID,
-    build_prediction_schema,
-    canonical_limitations,
-    classify_prediction_source,
-    discover_default_source,
-    format_generated_at,
-    format_path,
-    infer_meta_path,
-    load_prediction_metadata,
-    load_predictions_csv,
-    maybe_fix_mojibake,
-    normalize_location_value,
-    pretty_label,
-    source_kind_label,
-    source_kind_note,
-)
+try:
+    from dashboard.utils import (
+        PredictionSchema,
+        PROVINCE_CENTROID,
+        build_prediction_schema,
+        canonical_limitations,
+        classify_prediction_source,
+        discover_default_source,
+        format_generated_at,
+        format_path,
+        infer_meta_path,
+        load_prediction_metadata,
+        load_predictions_csv,
+        maybe_fix_mojibake,
+        normalize_location_value,
+        pretty_label,
+        source_kind_label,
+        source_kind_note,
+    )
+except ModuleNotFoundError:
+    from utils import (  # type: ignore[no-redef]
+        PredictionSchema,
+        PROVINCE_CENTROID,
+        build_prediction_schema,
+        canonical_limitations,
+        classify_prediction_source,
+        discover_default_source,
+        format_generated_at,
+        format_path,
+        infer_meta_path,
+        load_prediction_metadata,
+        load_predictions_csv,
+        maybe_fix_mojibake,
+        normalize_location_value,
+        pretty_label,
+        source_kind_label,
+        source_kind_note,
+    )
 
 
 REPO_DASHBOARD = "https://github.com/ahmedberatAI/afetYonetimi-dashboard"
