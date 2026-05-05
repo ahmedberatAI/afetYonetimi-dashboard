@@ -1,5 +1,7 @@
+import base64
 import datetime as dt
 import html
+import io
 import time
 from pathlib import Path
 
@@ -7,6 +9,21 @@ import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+
+    PLOTLY_AVAILABLE = True
+except Exception:
+    PLOTLY_AVAILABLE = False
+
+try:
+    import qrcode
+
+    QRCODE_AVAILABLE = True
+except Exception:
+    QRCODE_AVAILABLE = False
 
 from dashboard.utils import (
     PredictionSchema,
@@ -28,76 +45,337 @@ from dashboard.utils import (
 )
 
 
-st.set_page_config(page_title="AfetYonetimi | Need Dashboard", layout="wide")
+REPO_DASHBOARD = "https://github.com/ahmedberatAI/afetYonetimi-dashboard"
+REPO_MAIN = "https://github.com/ahmedberatAI/afet-aciliyet-sinyalleri"
+
+PLOTLY_TEMPLATE = "plotly_dark"
+PLOTLY_PALETTE = ["#dc2626", "#f97316", "#fbbf24", "#22d3ee", "#60a5fa", "#a78bfa", "#f472b6", "#34d399", "#facc15"]
+
+
+st.set_page_config(
+    page_title="AfetYonetimi | Ihtiyac Sinyalleri",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    page_icon="🛟",
+)
 
 
 def _inject_styles() -> None:
     st.markdown(
         """
         <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+        html, body, [class*="css"], .stApp, .block-container {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+        }
+
         .block-container {
-            padding-top: 2rem;
+            padding-top: 1.4rem;
             padding-bottom: 2.75rem;
+            max-width: 1500px;
         }
-        .source-banner {
-            border-radius: 18px;
-            padding: 1.05rem 1.2rem 1.15rem 1.2rem;
-            margin: 0.35rem 0 1.15rem 0;
-            border: 1px solid rgba(148, 163, 184, 0.35);
-            box-shadow: 0 18px 45px rgba(15, 23, 42, 0.14);
+
+        .stApp {
+            background:
+                radial-gradient(ellipse at top left, rgba(220, 38, 38, 0.10), transparent 55%),
+                radial-gradient(ellipse at bottom right, rgba(37, 99, 235, 0.12), transparent 55%),
+                #0b1220;
         }
-        .source-banner .eyebrow {
+
+        /* HERO */
+        .hero {
+            position: relative;
+            border-radius: 20px;
+            padding: 1.6rem 1.8rem 1.5rem 1.8rem;
+            margin-bottom: 1.1rem;
+            background: linear-gradient(125deg, rgba(127, 29, 29, 0.85) 0%, rgba(15, 23, 42, 0.92) 55%, rgba(30, 64, 175, 0.55) 100%);
+            border: 1px solid rgba(220, 38, 38, 0.35);
+            box-shadow: 0 30px 70px rgba(0, 0, 0, 0.45);
+            overflow: hidden;
+        }
+        .hero::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 90% 10%, rgba(248, 113, 113, 0.18), transparent 45%);
+            pointer-events: none;
+        }
+        .hero-grid {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 1.4rem;
+            position: relative;
+        }
+        .hero-left { max-width: 760px; }
+        .hero-eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.55rem;
             font-size: 0.74rem;
             text-transform: uppercase;
-            letter-spacing: 0.1em;
-            opacity: 0.82;
+            letter-spacing: 0.18em;
+            font-weight: 700;
+            color: #fecaca;
+            background: rgba(220, 38, 38, 0.15);
+            border: 1px solid rgba(220, 38, 38, 0.5);
+            padding: 0.32rem 0.8rem;
+            border-radius: 999px;
+        }
+        .hero-eyebrow .pulse {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #ef4444;
+            box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+            animation: pulse 1.6s infinite;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.75); }
+            70% { box-shadow: 0 0 0 14px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        .hero-title {
+            color: #f8fafc;
+            font-size: 2.1rem;
+            font-weight: 800;
+            line-height: 1.1;
+            margin: 0.7rem 0 0.45rem 0;
+            letter-spacing: -0.01em;
+        }
+        .hero-sub {
+            color: #cbd5e1;
+            font-size: 1.02rem;
+            line-height: 1.5;
+            max-width: 700px;
+        }
+        .hero-meta {
+            margin-top: 0.85rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        .hero-chip {
+            font-size: 0.78rem;
+            color: #e2e8f0;
+            background: rgba(148, 163, 184, 0.14);
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 999px;
+            padding: 0.28rem 0.75rem;
+        }
+        .hero-right {
+            display: flex;
+            gap: 0.85rem;
+            flex-wrap: wrap;
+        }
+
+        /* BIG STAT CARDS */
+        .stat-card {
+            min-width: 168px;
+            border-radius: 16px;
+            padding: 0.95rem 1.05rem;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.7) 0%, rgba(15, 23, 42, 0.45) 100%);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(8px);
+        }
+        .stat-card .label {
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: #94a3b8;
+        }
+        .stat-card .value {
+            font-size: 2.1rem;
+            font-weight: 800;
+            color: #f8fafc;
+            margin-top: 0.18rem;
+            line-height: 1.0;
+            letter-spacing: -0.02em;
+        }
+        .stat-card .delta {
+            margin-top: 0.35rem;
+            font-size: 0.82rem;
+            color: #fbbf24;
+        }
+        .stat-card.accent-red    { border-color: rgba(220, 38, 38, 0.55); }
+        .stat-card.accent-orange { border-color: rgba(249, 115, 22, 0.55); }
+        .stat-card.accent-blue   { border-color: rgba(59, 130, 246, 0.55); }
+        .stat-card.accent-green  { border-color: rgba(34, 197, 94, 0.55); }
+        .stat-card.accent-purple { border-color: rgba(168, 85, 247, 0.55); }
+
+        /* SEVERITY LEGEND */
+        .severity-legend {
+            display: flex;
+            gap: 0.55rem;
+            flex-wrap: wrap;
+            margin: 0.4rem 0 0.6rem 0;
+        }
+        .severity-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            font-size: 0.78rem;
+            color: #e2e8f0;
+            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            border-radius: 999px;
+            padding: 0.25rem 0.7rem;
+        }
+        .severity-pill .dot {
+            width: 10px; height: 10px; border-radius: 50%;
+            box-shadow: 0 0 8px currentColor;
+        }
+        .sev-critical { color: #7f0000; }
+        .sev-high     { color: #cb181d; }
+        .sev-medium   { color: #ef3b2c; }
+        .sev-watch    { color: #fd8d3c; }
+
+        /* TICKER */
+        .ticker-wrap {
+            position: relative;
+            overflow: hidden;
+            border-radius: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.85) 0%, rgba(15, 23, 42, 0.6) 100%);
+            margin-bottom: 1.0rem;
+        }
+        .ticker-wrap::before, .ticker-wrap::after {
+            content: "";
+            position: absolute;
+            top: 0; bottom: 0;
+            width: 80px;
+            z-index: 2;
+            pointer-events: none;
+        }
+        .ticker-wrap::before { left: 0; background: linear-gradient(90deg, #0b1220, transparent); }
+        .ticker-wrap::after  { right: 0; background: linear-gradient(270deg, #0b1220, transparent); }
+        .ticker-track {
+            display: inline-flex;
+            gap: 1.6rem;
+            padding: 0.6rem 1rem;
+            white-space: nowrap;
+            animation: tickerScroll 90s linear infinite;
+        }
+        .ticker-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.55rem;
+            font-size: 0.88rem;
+            color: #e2e8f0;
+        }
+        .ticker-item .badge {
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 0.18rem 0.55rem;
+            border-radius: 999px;
+            color: #0b1220;
+            background: #fbbf24;
+        }
+        .ticker-item .badge.b-arama_kurtarma { background: #dc2626; color: #fff; }
+        .ticker-item .badge.b-saglik         { background: #ec4899; color: #fff; }
+        .ticker-item .badge.b-barinma        { background: #f97316; color: #0b1220; }
+        .ticker-item .badge.b-gida_su        { background: #22d3ee; color: #0b1220; }
+        .ticker-item .badge.b-altyapi        { background: #a78bfa; color: #0b1220; }
+        .ticker-item .badge.b-guvenlik       { background: #facc15; color: #0b1220; }
+        .ticker-item .badge.b-lojistik       { background: #34d399; color: #0b1220; }
+        .ticker-item .badge.b-psikolojik     { background: #60a5fa; color: #0b1220; }
+        .ticker-item .badge.b-bilgi_paylasimi{ background: #94a3b8; color: #0b1220; }
+        @keyframes tickerScroll {
+            0%   { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
+
+        /* SOURCE BANNER (kept, restyled) */
+        .source-banner {
+            border-radius: 14px;
+            padding: 0.85rem 1.1rem;
+            margin: 0.2rem 0 1.0rem 0;
+            border: 1px solid rgba(148, 163, 184, 0.3);
+            background: rgba(15, 23, 42, 0.6);
+        }
+        .source-banner .eyebrow {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: #94a3b8;
         }
         .source-banner .title {
-            font-size: 1.4rem;
+            font-size: 1.05rem;
             font-weight: 700;
-            margin-top: 0.18rem;
+            margin-top: 0.15rem;
+            color: #f8fafc;
         }
         .source-banner .body {
-            margin-top: 0.4rem;
-            font-size: 0.98rem;
+            margin-top: 0.3rem;
+            font-size: 0.88rem;
+            color: #cbd5e1;
             line-height: 1.45;
         }
         .source-banner .meta {
-            margin-top: 0.5rem;
-            font-size: 0.86rem;
-            opacity: 0.9;
+            margin-top: 0.4rem;
+            font-size: 0.78rem;
+            color: #94a3b8;
         }
-        .source-banner.canonical {
-            background: linear-gradient(130deg, rgba(6, 78, 59, 0.95) 0%, rgba(8, 145, 178, 0.92) 100%);
-            color: #f0fdfa;
+        .source-banner.canonical  { border-left: 4px solid #10b981; }
+        .source-banner.candidate  { border-left: 4px solid #3b82f6; }
+        .source-banner.historical { border-left: 4px solid #f97316; }
+        .source-banner.custom     { border-left: 4px solid #94a3b8; }
+
+        /* TAB STYLE */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.5rem;
+            background: rgba(15, 23, 42, 0.55);
+            padding: 0.4rem;
+            border-radius: 14px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
         }
-        .source-banner.candidate {
-            background: linear-gradient(130deg, rgba(14, 116, 144, 0.92) 0%, rgba(30, 64, 175, 0.92) 100%);
-            color: #eff6ff;
-        }
-        .source-banner.historical {
-            background: linear-gradient(130deg, rgba(146, 64, 14, 0.95) 0%, rgba(194, 65, 12, 0.92) 100%);
-            color: #fff7ed;
-        }
-        .source-banner.custom {
-            background: linear-gradient(130deg, rgba(30, 41, 59, 0.95) 0%, rgba(51, 65, 85, 0.92) 100%);
-            color: #f8fafc;
-        }
-        .callout-panel {
-            border-radius: 16px;
-            border: 1px solid rgba(148, 163, 184, 0.28);
-            padding: 1rem 1.05rem;
-            background: linear-gradient(180deg, rgba(248, 250, 252, 0.95) 0%, rgba(241, 245, 249, 0.98) 100%);
-        }
-        .callout-panel h4 {
-            margin: 0 0 0.35rem 0;
-            font-size: 1.02rem;
-        }
-        .callout-panel p {
-            margin: 0.2rem 0;
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 10px;
+            padding: 0.5rem 1.1rem;
+            color: #cbd5e1;
+            font-weight: 600;
             font-size: 0.92rem;
-            line-height: 1.45;
         }
+        .stTabs [aria-selected="true"] {
+            background: linear-gradient(135deg, #dc2626 0%, #ea580c 100%);
+            color: #fff !important;
+            box-shadow: 0 6px 18px rgba(220, 38, 38, 0.35);
+        }
+
+        /* QR CARDS */
+        .qr-card {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            padding: 0.7rem;
+            border-radius: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            background: rgba(15, 23, 42, 0.55);
+            margin-bottom: 0.55rem;
+        }
+        .qr-card img { border-radius: 8px; background: #fff; padding: 4px; }
+        .qr-card .qr-label { font-size: 0.78rem; font-weight: 600; color: #f8fafc; }
+        .qr-card .qr-link  { font-size: 0.7rem; color: #94a3b8; word-break: break-all; }
+
+        /* MISC */
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #0a0f1d 0%, #0b1220 100%);
+            border-right: 1px solid rgba(148, 163, 184, 0.12);
+        }
+        h2, h3, h4 { color: #f1f5f9 !important; }
+        .signal-hero {
+            background: linear-gradient(120deg, rgba(127, 29, 29, 0.55) 0%, rgba(30, 64, 175, 0.45) 100%);
+            border: 1px solid rgba(220, 38, 38, 0.35);
+            border-radius: 14px;
+            padding: 14px 18px;
+            margin: 0.35rem 0 0.85rem 0;
+        }
+        .signal-hero-title { color: #f8fafc; font-size: 1.05rem; font-weight: 700; }
+        .signal-hero-sub   { color: #fecaca; font-size: 0.91rem; margin-top: 0.25rem; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -136,6 +414,19 @@ def load_location_index(path_str: str = "data/gazetteer/earthquake_region_neighb
     dist = g.groupby(["province", "district"], dropna=False)[["lat", "lon"]].mean().reset_index()
     prov = g.groupby(["province"], dropna=False)[["lat", "lon"]].mean().reset_index()
     return neigh, dist, prov
+
+
+@st.cache_data(show_spinner=False)
+def _qr_data_uri(payload: str) -> str | None:
+    if not QRCODE_AVAILABLE:
+        return None
+    try:
+        img = qrcode.make(payload)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return None
 
 
 def _filter_df(df: pd.DataFrame, schema: PredictionSchema) -> pd.DataFrame:
@@ -321,29 +612,245 @@ def _render_source_banner(source_kind: str, metadata: dict | None, default_note:
     )
 
 
-def _render_summary_cards(df_all: pd.DataFrame, df_filtered: pd.DataFrame, schema: PredictionSchema) -> None:
+def _stat_card_html(label: str, value: str, accent: str = "blue", delta: str | None = None) -> str:
+    delta_html = f'<div class="delta">{html.escape(delta)}</div>' if delta else ""
+    return (
+        f'<div class="stat-card accent-{accent}">'
+        f'<div class="label">{html.escape(label)}</div>'
+        f'<div class="value">{html.escape(value)}</div>'
+        f'{delta_html}'
+        f'</div>'
+    )
+
+
+def _render_hero(df_all: pd.DataFrame, df_filtered: pd.DataFrame, schema: PredictionSchema, metadata: dict | None) -> None:
     label_counts = _label_counts(df_filtered, schema)
     top_label = pretty_label(label_counts.iloc[0]["label"]) if not label_counts.empty else "n/a"
     top_label_value = int(label_counts.iloc[0]["count"]) if not label_counts.empty else 0
 
-    columns = st.columns(5)
-    columns[0].metric("Toplam satir", f"{len(df_all):,}")
-    columns[1].metric("Filtrelenmis satir", f"{len(df_filtered):,}")
-
+    any_need_total = 0
     if "pred_any_need" in df_filtered.columns and len(df_filtered):
         any_need_total = int(pd.to_numeric(df_filtered["pred_any_need"], errors="coerce").fillna(0).sum())
-        any_need_rate = (any_need_total / len(df_filtered)) * 100.0
-        columns[2].metric("pred_any_need=1", f"{any_need_total:,}", delta=f"{any_need_rate:.1f}%")
-    else:
-        columns[2].metric("pred_any_need=1", "n/a")
 
+    province_count = 0
+    if "province" in df_filtered.columns:
+        province_count = int(df_filtered["province"].dropna().astype(str).str.strip().replace("", np.nan).dropna().nunique())
+
+    urgency_mean = 0.0
     if "urgency_score" in df_filtered.columns and len(df_filtered):
-        urgency_mean = pd.to_numeric(df_filtered["urgency_score"], errors="coerce").fillna(0.0).mean()
-        columns[3].metric("Urgency mean", f"{urgency_mean:.2f}")
-    else:
-        columns[3].metric("Urgency mean", "n/a")
+        urgency_mean = float(pd.to_numeric(df_filtered["urgency_score"], errors="coerce").fillna(0.0).mean())
 
-    columns[4].metric("Top label", top_label, delta=f"{top_label_value:,}" if top_label_value else None)
+    generated_at = format_generated_at(metadata.get("generated_at")) if metadata else None
+    experiment = metadata.get("selected_experiment_key") if metadata else None
+
+    cards = [
+        _stat_card_html("Toplam tweet", f"{len(df_all):,}", "blue"),
+        _stat_card_html("Filtrelenmis", f"{len(df_filtered):,}", "purple"),
+        _stat_card_html("Ihtiyac sinyali", f"{any_need_total:,}", "red"),
+        _stat_card_html("Kapsanan il", f"{province_count}", "green"),
+        _stat_card_html("Ort. urgency", f"{urgency_mean:.2f}", "orange"),
+        _stat_card_html("En kritik etiket", top_label, "red", delta=f"{top_label_value:,} sinyal" if top_label_value else None),
+    ]
+
+    chip_meta = []
+    if experiment:
+        chip_meta.append(f"Experiment: {experiment}")
+    if generated_at:
+        chip_meta.append(f"Uretildi: {generated_at}")
+    chip_meta.append("Veri: 6-13 Subat 2023 | 11 il")
+
+    st.markdown(
+        f"""
+        <div class="hero">
+            <div class="hero-grid">
+                <div class="hero-left">
+                    <span class="hero-eyebrow"><span class="pulse"></span> CANLI DEMO  -  AFET YONETIMI</span>
+                    <div class="hero-title">Afet Aciliyet Sinyalleri | Sosyal Medya Tabanli Ihtiyac Tespiti</div>
+                    <div class="hero-sub">
+                        6 Subat 2023 Kahramanmaras depremi sonrasi atilan tweet'leri 9 ihtiyac kategorisine sinifliyor,
+                        konum cikarimi ile saatlik sicak nokta haritasi uretiyoruz. Amac: kriz aninda en aciliyetli sinyallere
+                        erken yanit verebilmek.
+                    </div>
+                    <div class="hero-meta">
+                        {''.join(f'<span class="hero-chip">{html.escape(c)}</span>' for c in chip_meta)}
+                    </div>
+                </div>
+                <div class="hero-right">
+                    {''.join(cards)}
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_ticker(df: pd.DataFrame, schema: PredictionSchema, max_items: int = 18) -> None:
+    if df.empty or "tweet_clean" not in df.columns:
+        return
+
+    samples = df.copy()
+    if "urgency_score" in samples.columns:
+        samples["__u"] = pd.to_numeric(samples["urgency_score"], errors="coerce").fillna(0.0)
+        samples = samples.sort_values("__u", ascending=False)
+    samples = samples.head(max_items * 2)
+
+    items_html = []
+    for _, row in samples.iterrows():
+        text = str(row.get("tweet_clean") or "").strip().replace("\n", " ")
+        if not text:
+            continue
+        if len(text) > 140:
+            text = text[:137] + "..."
+
+        labels = []
+        for label in schema.labels:
+            pred_column = schema.label_to_pred.get(label)
+            if pred_column and pred_column in row.index:
+                try:
+                    if int(row[pred_column]) == 1:
+                        labels.append(label)
+                except (ValueError, TypeError):
+                    continue
+            if len(labels) >= 2:
+                break
+
+        province = str(row.get("province") or "").strip()
+        loc_part = f" | {html.escape(province)}" if province else ""
+        badges = "".join(
+            f'<span class="badge b-{html.escape(lab)}">{html.escape(pretty_label(lab))}</span>' for lab in labels
+        )
+        items_html.append(
+            f'<span class="ticker-item">{badges}<span>{html.escape(text)}{loc_part}</span></span>'
+        )
+        if len(items_html) >= max_items:
+            break
+
+    if not items_html:
+        return
+
+    track_html = "".join(items_html)
+    st.markdown(
+        f"""
+        <div class="ticker-wrap">
+            <div class="ticker-track">{track_html}{track_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _severity_legend() -> str:
+    return (
+        '<div class="severity-legend">'
+        '<span class="severity-pill"><span class="dot sev-critical" style="background:#7f0000"></span> Kritik (>=p95)</span>'
+        '<span class="severity-pill"><span class="dot sev-high" style="background:#cb181d"></span> Yuksek (>=p80)</span>'
+        '<span class="severity-pill"><span class="dot sev-medium" style="background:#ef3b2c"></span> Orta (>=p50)</span>'
+        '<span class="severity-pill"><span class="dot sev-watch" style="background:#fd8d3c"></span> Izleme</span>'
+        '</div>'
+    )
+
+
+def _render_qr_card(label: str, url: str) -> None:
+    data_uri = _qr_data_uri(url)
+    if not data_uri:
+        st.markdown(
+            f"""
+            <div class="qr-card">
+                <div>
+                    <div class="qr-label">{html.escape(label)}</div>
+                    <div class="qr-link">{html.escape(url)}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+    st.markdown(
+        f"""
+        <div class="qr-card">
+            <img src="{data_uri}" width="78" height="78" />
+            <div>
+                <div class="qr-label">{html.escape(label)}</div>
+                <div class="qr-link">{html.escape(url)}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _plot_label_counts(counts_df: pd.DataFrame) -> None:
+    if counts_df.empty:
+        st.info("Filtrelenmis veri icin pred_* label dagilimi bulunamadi.")
+        return
+    view = counts_df.copy()
+    view["label_pretty"] = view["label"].map(pretty_label)
+    if PLOTLY_AVAILABLE:
+        fig = px.bar(
+            view, x="count", y="label_pretty", orientation="h",
+            color="count", color_continuous_scale=["#1e293b", "#dc2626"],
+            template=PLOTLY_TEMPLATE,
+        )
+        fig.update_layout(
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis_title="Sinyal sayisi", yaxis_title="",
+            yaxis={"categoryorder": "total ascending"},
+            coloraxis_showscale=False,
+            height=380,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#e2e8f0",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.bar_chart(view.set_index("label_pretty")["count"])
+
+
+def _plot_prevalence(prevalence_df: pd.DataFrame) -> None:
+    if prevalence_df.empty:
+        return
+    view = prevalence_df.copy()
+    view["label_pretty"] = view["label"].map(pretty_label)
+    if PLOTLY_AVAILABLE:
+        fig = go.Figure()
+        fig.add_bar(name="Tum veri (%)", x=view["label_pretty"], y=view["full_rate_pct"], marker_color="#3b82f6")
+        fig.add_bar(name="Filtreli (%)", x=view["label_pretty"], y=view["filtered_rate_pct"], marker_color="#dc2626")
+        fig.update_layout(
+            barmode="group", template=PLOTLY_TEMPLATE,
+            margin=dict(l=10, r=10, t=30, b=10),
+            xaxis_title="", yaxis_title="Yuzde",
+            height=360,
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#e2e8f0",
+            legend=dict(orientation="h", y=1.15),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.bar_chart(view.set_index("label_pretty")[["full_rate_pct", "filtered_rate_pct"]])
+
+
+def _plot_temporal(df: pd.DataFrame) -> None:
+    if "date" not in df.columns:
+        st.info("date kolonu yok; zaman serisi cizilemedi.")
+        return
+    timeline = df.groupby("date").size().reset_index(name="count").sort_values("date")
+    if timeline.empty:
+        st.info("Zaman serisi icin veri yok.")
+        return
+    if PLOTLY_AVAILABLE:
+        fig = px.area(timeline, x="date", y="count", template=PLOTLY_TEMPLATE)
+        fig.update_traces(line_color="#dc2626", fillcolor="rgba(220,38,38,0.3)")
+        fig.update_layout(
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis_title="Tarih", yaxis_title="Tweet sayisi",
+            height=320,
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#e2e8f0",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.line_chart(timeline.set_index("date")["count"])
 
 
 def _render_provenance_panel(
@@ -438,33 +945,7 @@ def _render_schema_panel(metadata: dict | None, schema: PredictionSchema, preval
 
 def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
     st.subheader("Saatlik Yardim Sinyalleri (Harita)")
-
-    st.markdown(
-        """
-        <style>
-        .signal-hero {
-            background: linear-gradient(120deg, rgba(12,74,110,0.92) 0%, rgba(30,64,175,0.88) 45%, rgba(15,23,42,0.94) 100%);
-            border: 1px solid rgba(148, 163, 184, 0.45);
-            border-radius: 14px;
-            padding: 14px 18px;
-            margin: 0.35rem 0 0.85rem 0;
-            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.25);
-        }
-        .signal-hero-title {
-            color: #f8fafc;
-            font-size: 1.05rem;
-            font-weight: 700;
-            letter-spacing: 0.2px;
-        }
-        .signal-hero-sub {
-            color: #dbeafe;
-            font-size: 0.91rem;
-            margin-top: 0.25rem;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(_severity_legend(), unsafe_allow_html=True)
 
     if "created_at_local" not in df.columns or df["created_at_local"].isna().all():
         st.info("created_at bilgisi yok; saatlik harita olusturulamadi.")
@@ -482,13 +963,13 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
         return
 
     if "timeline_playing" not in st.session_state:
-        st.session_state["timeline_playing"] = False
+        st.session_state["timeline_playing"] = True  # autoplay default
     if "timeline_interval_s" not in st.session_state:
-        st.session_state["timeline_interval_s"] = 0.8
+        st.session_state["timeline_interval_s"] = 1.2
     if "timeline_loop" not in st.session_state:
         st.session_state["timeline_loop"] = True
     if "timeline_show_heatmap" not in st.session_state:
-        st.session_state["timeline_show_heatmap"] = False
+        st.session_state["timeline_show_heatmap"] = True
     if "timeline_pending_hour" in st.session_state:
         pending = st.session_state.pop("timeline_pending_hour")
         if pending in hour_values:
@@ -764,7 +1245,7 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
                     radius_pixels=75,
                     intensity=1.2,
                     threshold=0.03,
-                    opacity=0.38,
+                    opacity=0.42,
                 )
             )
         layers.append(
@@ -784,7 +1265,7 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
 
         zoom_map = 6.4 if loc_level == "neighborhood" else (6.0 if loc_level == "district" else 5.6)
         deck = pdk.Deck(
-            map_style="https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
+            map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
             initial_view_state=pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=zoom_map, pitch=22),
             layers=layers,
             tooltip=tooltip,
@@ -814,7 +1295,25 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
             use_container_width=True,
             hide_index=True,
         )
-        st.bar_chart(top_df[["location_label", "signal"]].set_index("location_label"))
+
+        if PLOTLY_AVAILABLE:
+            mini = top_df.head(10).iloc[::-1]
+            fig = px.bar(
+                mini, x="signal", y="location_label", orientation="h",
+                color="signal", color_continuous_scale=["#fed976", "#dc2626"],
+                template=PLOTLY_TEMPLATE,
+            )
+            fig.update_layout(
+                margin=dict(l=10, r=10, t=10, b=10),
+                xaxis_title="Sinyal", yaxis_title="",
+                coloraxis_showscale=False,
+                height=320,
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#e2e8f0",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.bar_chart(top_df[["location_label", "signal"]].set_index("location_label"))
 
         label_rows = []
         for label in schema.labels:
@@ -856,14 +1355,13 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
         st.rerun()
 
 
-_inject_styles()
+# ---------- BOOT ----------
 
-st.title("AfetYonetimi | Ihtiyac Siniflandirma Dashboard")
-st.caption("Canonical final v2 output tercih edilir. Historical 63k artifact sadece acik fallback olarak gosterilir.")
+_inject_styles()
 
 default_source = discover_default_source()
 
-st.sidebar.header("Veri Kaynagi")
+st.sidebar.markdown("### Veri Kaynagi")
 st.sidebar.caption(f"Otomatik varsayilan: {default_source.label}")
 st.sidebar.caption(default_source.note)
 
@@ -879,9 +1377,13 @@ resolved_meta_path = infer_meta_path(csv_path_input) if auto_meta else (Path(man
 if auto_meta and resolved_meta_path is not None:
     st.sidebar.caption(f"Metadata path: {format_path(resolved_meta_path)}")
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Filtreler")
+
 df_all: pd.DataFrame | None = None
 try:
-    df_all = load_predictions_csv(csv_path_input)
+    with st.spinner("Tahminler yukleniyor..."):
+        df_all = load_predictions_csv(csv_path_input)
 except FileNotFoundError:
     st.error(f"Dosya bulunamadi: {csv_path_input}")
     df_all = None
@@ -900,68 +1402,125 @@ except OSError:
     default_csv_resolved = str(default_source.csv_path)
 banner_note = default_source.note if active_csv_resolved == default_csv_resolved else ""
 
-_render_source_banner(source_kind, metadata, banner_note)
-
 df_filtered = _filter_df(df_all, schema)
 
-_render_summary_cards(df_all, df_filtered, schema)
-_render_provenance_panel(csv_path_input, str(resolved_meta_path) if resolved_meta_path else None, metadata, df_all, source_kind)
+# --- HERO + TICKER ---
+_render_hero(df_all, df_filtered, schema, metadata)
+_render_ticker(df_filtered if not df_filtered.empty else df_all, schema)
+_render_source_banner(source_kind, metadata, banner_note)
 
-st.subheader("Label Prevalence")
-prevalence_df = _label_prevalence(df_all, df_filtered, metadata, schema)
-prev_col, chart_col = st.columns([1.45, 1.0], gap="large")
-with prev_col:
-    if prevalence_df.empty:
-        st.info("Pred prevalence tablosu olusturulamadi.")
+# --- SIDEBAR LINKS / QR ---
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Proje Linkleri")
+_render_qr_card("Dashboard repo", REPO_DASHBOARD)
+_render_qr_card("Ana model repo", REPO_MAIN)
+st.sidebar.caption("QR kodu telefonunuzla taratabilirsiniz.")
+
+# --- TABS ---
+tab_map, tab_insights, tab_tweets, tab_about = st.tabs(
+    ["Canli Harita", "Icgoruler", "Tweet Listesi", "Hakkinda"]
+)
+
+with tab_map:
+    if df_filtered.empty:
+        st.warning("Secili filtrelerle eslesen satir yok. Filtreleri sidebar'dan gevsetin.")
     else:
+        _hourly_signal_map(df_filtered, schema)
+
+        st.subheader("Il Bazli Yogunluk (Centroid)")
+        province_map_df = _province_map_df(df_filtered)
+        if province_map_df.empty:
+            st.info("Harita icin province -> (lat, lon) eslesmesi bulunamadi.")
+        else:
+            map_col, table_col = st.columns([1.6, 1.0], gap="large")
+            with map_col:
+                if PLOTLY_AVAILABLE:
+                    fig = px.scatter_mapbox(
+                        province_map_df, lat="lat", lon="lon", size="count", color="count",
+                        hover_name="province",
+                        color_continuous_scale=["#fbbf24", "#dc2626"],
+                        size_max=55, zoom=5.4,
+                        mapbox_style="carto-darkmatter",
+                    )
+                    fig.update_layout(
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        height=420,
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font_color="#e2e8f0",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.map(province_map_df)
+            with table_col:
+                st.dataframe(
+                    province_map_df.sort_values("count", ascending=False)[["province", "count"]].rename(
+                        columns={"province": "Il", "count": "Tweet"}
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+with tab_insights:
+    st.subheader("Etiket Prevalansi")
+    prevalence_df = _label_prevalence(df_all, df_filtered, metadata, schema)
+    _plot_prevalence(prevalence_df)
+
+    chart_col_a, chart_col_b = st.columns([1.1, 1.0], gap="large")
+    with chart_col_a:
+        st.subheader("Etiket Dagilimi (Filtreli)")
+        filtered_counts = _label_counts(df_filtered, schema) if not df_filtered.empty else pd.DataFrame(columns=["label", "count"])
+        _plot_label_counts(filtered_counts)
+    with chart_col_b:
+        st.subheader("Zamansal Dagilim")
+        _plot_temporal(df_filtered if not df_filtered.empty else df_all)
+
+    if not prevalence_df.empty:
+        st.caption("Tablo: full vs filtreli oranlar")
         prevalence_view = prevalence_df.copy()
         prevalence_view["label"] = prevalence_view["label"].map(pretty_label)
         st.dataframe(prevalence_view, use_container_width=True, hide_index=True)
-with chart_col:
-    if not prevalence_df.empty:
-        prevalence_chart_df = prevalence_df.copy()
-        prevalence_chart_df["label"] = prevalence_chart_df["label"].map(pretty_label)
-        st.bar_chart(prevalence_chart_df.set_index("label")[["full_rate_pct", "filtered_rate_pct"]])
 
-_render_schema_panel(metadata, schema, prevalence_df)
+with tab_tweets:
+    st.subheader("Tweet Listesi")
+    if df_filtered.empty:
+        st.info("Secili filtrelerle eslesen tweet yok.")
+    else:
+        columns_to_show = [
+            column
+            for column in ["date", "time", "province", "district", "neighborhood", "urgency_score", "tweet_clean"]
+            if column in df_filtered.columns
+        ]
+        predicted_columns = [schema.label_to_pred[label] for label in schema.labels if label in schema.label_to_pred]
+        columns_to_show = columns_to_show + predicted_columns
+        st.dataframe(df_filtered[columns_to_show].head(500), use_container_width=True, hide_index=True)
 
-if df_filtered.empty:
-    st.warning("Secili filtrelerle eslesen satir yok. Provenance ve schema panelleri yine de yukarida gorunur.")
-    st.stop()
+with tab_about:
+    st.subheader("Proje Hakkinda")
+    st.markdown(
+        """
+        **Afet Yonetimi - Sosyal Medya Tabanli Ihtiyac Sinyalleri** projesi, 6 Subat 2023 Kahramanmaras
+        depremi sirasinda atilan tweet'lerden ihtiyac kategorilerini cikarmayi ve konum bilgisi ile
+        birlestirip saatlik sicak nokta haritasi uretmeyi hedefler.
 
-st.subheader("Etiket Dagilimi (Pred)")
-filtered_counts = _label_counts(df_filtered, schema)
-if filtered_counts.empty:
-    st.info("Filtrelenmis veri icin pred_* label dagilimi bulunamadi.")
-else:
-    counts_view = filtered_counts.copy()
-    counts_view["label"] = counts_view["label"].map(pretty_label)
-    st.dataframe(counts_view, use_container_width=True, hide_index=True)
-    st.bar_chart(filtered_counts.set_index("label")["count"])
+        - **9 ihtiyac etiketi**: arama_kurtarma, saglik, barinma, gida_su, altyapi, guvenlik, lojistik, psikolojik, bilgi_paylasimi
+        - **Konum cikarimi**: il / ilce / mahalle seviyesinde
+        - **Urgency skoru**: tweet onceligini sayisallastiran kompozit metrik
+        - **Canonical v2 final**: en guncel egitim deneyinin tahmin ciktisi
+        """
+    )
 
-st.subheader("Zamansal Dagilim")
-if "date" in df_filtered.columns:
-    timeline = df_filtered.groupby("date").size().reset_index(name="count").sort_values("date")
-    st.line_chart(timeline.set_index("date")["count"])
-else:
-    st.info("date kolonu yok; zaman serisi cizilemedi.")
+    qr_a, qr_b = st.columns(2)
+    with qr_a:
+        _render_qr_card("Dashboard repo (UI)", REPO_DASHBOARD)
+    with qr_b:
+        _render_qr_card("Ana model repo (egitim & analiz)", REPO_MAIN)
 
-st.subheader("Harita (Il Centroid Prototype)")
-province_map_df = _province_map_df(df_filtered)
-if province_map_df.empty:
-    st.info("Harita icin province -> (lat, lon) eslesmesi bulunamadi.")
-else:
-    st.map(province_map_df)
-    st.dataframe(province_map_df.sort_values("count", ascending=False), use_container_width=True, hide_index=True)
-
-_hourly_signal_map(df_filtered, schema)
-
-st.subheader("Tweet Listesi")
-columns_to_show = [
-    column
-    for column in ["date", "time", "province", "district", "neighborhood", "urgency_score", "tweet_clean"]
-    if column in df_filtered.columns
-]
-predicted_columns = [schema.label_to_pred[label] for label in schema.labels if label in schema.label_to_pred]
-columns_to_show = columns_to_show + predicted_columns
-st.dataframe(df_filtered[columns_to_show].head(500), use_container_width=True, hide_index=True)
+    st.markdown("---")
+    _render_provenance_panel(
+        csv_path_input,
+        str(resolved_meta_path) if resolved_meta_path else None,
+        metadata,
+        df_all,
+        source_kind,
+    )
+    _render_schema_panel(metadata, schema, prevalence_df if "prevalence_df" in locals() else _label_prevalence(df_all, df_filtered, metadata, schema))
