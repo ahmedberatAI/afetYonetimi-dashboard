@@ -71,6 +71,32 @@ Bu script `data/predictions/need_predictions_geolocated_v2_final.*` dosyalarini 
 - `CSV yanindaki metadata dosyasini otomatik ara` aciksa app `*.meta.json` dosyasini otomatik dener.
 - Istersen metadata yolunu manual olarak da verebilirsin.
 
+## Tweet Test Sekmesi (Canli Inference)
+
+`Tweet Test` sekmesi, kanonik leak-free model
+(`exp3_silver_then_gold_v3_exgold`) ile elle yazilan bir cumlenin 9 ihtiyac
+etiketi icin olasilik ve CV-tuned esik tahminlerini canli sekilde gosterir.
+
+Model artefaktlari (~440 MB) repo icinde tutulmaz; su sirayla aranir:
+
+1. `AFETYONETIMI_MODEL_DIR` (ve istege bagli `AFETYONETIMI_LABELS_JSON`,
+   `AFETYONETIMI_THRESHOLDS_JSON`) ortam degiskenleri.
+2. Yan repo: `../afetYonetimi_colab/models/exp3_silver_then_gold_v3_exgold/final`
+   ile `label_columns.json` / `thresholds_cv.json`.
+3. Yan reponun `models/final/selection.json` cikti yolu (en yetkili).
+4. Dashboard repo icine elle kopyalanmis bir kopya.
+
+Ek bagimliliklar (yalnizca bu sekme icin gerekli, varsayilan kurulumda yok):
+
+```powershell
+pip install torch transformers
+```
+
+Streamlit Community Cloud'da bu sekmeyi calistirmak icin yeterli bellek
+yoktur; yerel calistirma icin tasarlanmistir. Streamlit Cloud kurulumunda
+sekme acilir ama `model_dir` bulunamadigi icin acik bir hata mesaji ile
+kapatilir, geri kalan sekmeler etkilenmez.
+
 ## Streamlit Community Cloud
 
 1. Streamlit Cloud panelinde "New app".

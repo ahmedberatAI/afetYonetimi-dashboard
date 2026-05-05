@@ -72,6 +72,27 @@ except ModuleNotFoundError:
         source_kind_note,
     )
 
+try:
+    from dashboard.inference import (
+        ModelBundle,
+        ModelLocation,
+        PredictionResult,
+        describe_candidates,
+        discover_model_location,
+        load_bundle,
+        predict_one,
+    )
+except ModuleNotFoundError:
+    from inference import (  # type: ignore[no-redef]
+        ModelBundle,
+        ModelLocation,
+        PredictionResult,
+        describe_candidates,
+        discover_model_location,
+        load_bundle,
+        predict_one,
+    )
+
 
 REPO_DASHBOARD = "https://github.com/ahmedberatAI/afetYonetimi-dashboard"
 REPO_MAIN = "https://github.com/ahmedberatAI/afet-aciliyet-sinyalleri"
@@ -1383,6 +1404,240 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
         st.rerun()
 
 
+# ---------- TWEET TEST TAB ----------
+
+EXAMPLE_TWEETS: list[tuple[str, str]] = [
+    (
+        "Arama-kurtarma",
+        "Hatay Antakya Sumerler mahallesi enkaz altinda kaldik lutfen yardim",
+    ),
+    (
+        "Gida & su",
+        "Kahramanmaras Dulkadiroglu Yorukselim mah. su ve yiyecek kalmadi cok ihtiyacimiz var",
+    ),
+    (
+        "Barinma",
+        "Adiyaman merkez evimiz hasarli cadira ihtiyac var ailecek disardayiz",
+    ),
+    (
+        "Saglik",
+        "Gaziantep Sehitkamil yarali var insulin lazim acil saglik ekibi cagiriyoruz",
+    ),
+    (
+        "Bilgi paylasimi",
+        "Malatya Yesilyurt'tan haber alamiyoruz iletisim yok lutfen ulaaabilen olursa paylassin",
+    ),
+]
+
+
+@st.cache_resource(show_spinner=False)
+def _cached_load_bundle(model_dir: str, labels_path: str, thresholds_path: str, max_length: int, prefer_cpu: bool) -> ModelBundle:
+    location = ModelLocation(
+        model_dir=Path(model_dir),
+        labels_path=Path(labels_path),
+        thresholds_path=Path(thresholds_path),
+        source_label="user-supplied",
+        note="Streamlit oturumunda yuklendi.",
+    )
+    return load_bundle(location, max_length=max_length, prefer_cpu=prefer_cpu)
+
+
+def _render_prediction_chart(result: PredictionResult) -> None:
+    df = pd.DataFrame(
+        {
+            "label": result.labels,
+            "prob": result.probs.astype(float),
+            "threshold": result.thresholds.astype(float),
+        }
+    )
+    df["label_pretty"] = df["label"].map(pretty_label)
+    df["predicted"] = df["prob"] >= df["threshold"]
+    df = df.sort_values("prob", ascending=True).reset_index(drop=True)
+
+    if PLOTLY_AVAILABLE:
+        bar_colors = [("#dc2626" if pred else "#475569") for pred in df["predicted"]]
+        fig = go.Figure()
+        fig.add_bar(
+            x=df["prob"],
+            y=df["label_pretty"],
+            orientation="h",
+            marker_color=bar_colors,
+            name="Olasilik",
+            hovertemplate="<b>%{y}</b><br>prob=%{x:.3f}<extra></extra>",
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=df["threshold"],
+                y=df["label_pretty"],
+                mode="markers",
+                marker=dict(symbol="line-ns", color="#fbbf24", size=18, line=dict(width=2, color="#fbbf24")),
+                name="Esik (CV)",
+                hovertemplate="<b>%{y}</b><br>thr=%{x:.3f}<extra></extra>",
+            )
+        )
+        fig.update_layout(
+            template=PLOTLY_TEMPLATE,
+            margin=dict(l=10, r=10, t=20, b=10),
+            xaxis=dict(title="Olasilik (sigmoid)", range=[0, 1]),
+            yaxis=dict(title=""),
+            height=380,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#e2e8f0",
+            legend=dict(orientation="h", y=1.12),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.bar_chart(df.set_index("label_pretty")["prob"])
+
+
+def _render_tweet_test_tab() -> None:
+    st.subheader("Tweet Test - Canli Etiket Tahmini")
+    st.caption(
+        "Bir tweet ya da kisa metin yazin; canonical leak-free model "
+        "(`exp3_silver_then_gold_v3_exgold`) 9 ihtiyac etiketi icin olasilik ve "
+        "CV-tuned esiklere gore tahmin uretsin."
+    )
+
+    auto_loc = discover_model_location()
+    candidates = describe_candidates()
+
+    with st.expander("Model dizini ayarlari", expanded=(auto_loc is None)):
+        st.caption(
+            "Model artefaktlari ~440 MB oldugu icin repo icinde tutulmuyor. "
+            "Asagidaki yollar otomatik denenir; istersen elle de gosterebilirsin."
+        )
+        for cand in candidates:
+            badge = "[OK]" if cand["exists"] else "[--]"
+            st.markdown(f"- {badge} **{cand['source']}** -> `{cand['model_dir']}`")
+        st.caption(
+            "Ortam degiskenleri: `AFETYONETIMI_MODEL_DIR`, `AFETYONETIMI_LABELS_JSON`, "
+            "`AFETYONETIMI_THRESHOLDS_JSON`."
+        )
+
+    default_model_dir = str(auto_loc.model_dir) if auto_loc else (candidates[0]["model_dir"] if candidates else "")
+    default_labels = str(auto_loc.labels_path) if auto_loc else (candidates[0]["labels"] if candidates else "")
+    default_thresholds = str(auto_loc.thresholds_path) if auto_loc else (candidates[0]["thresholds"] if candidates else "")
+
+    cfg_col_a, cfg_col_b = st.columns([1.6, 1.0], gap="medium")
+    with cfg_col_a:
+        model_dir_input = st.text_input("Model dizini", value=default_model_dir, key="tt_model_dir")
+        labels_input = st.text_input("label_columns.json", value=default_labels, key="tt_labels")
+        thresholds_input = st.text_input("thresholds_cv.json", value=default_thresholds, key="tt_thr")
+    with cfg_col_b:
+        max_length = st.slider("Tokenizer max_length", min_value=64, max_value=384, value=192, step=16)
+        prefer_cpu = st.checkbox("CPU kullan (GPU varsa bile)", value=False)
+        apply_clean = st.checkbox("Metni on-temizle (NFC + whitespace)", value=True)
+        st.caption("Metin temizligi `preprocess_emergency_data.clean_text` ile ayni: NFC normalize + whitespace.")
+
+    paths_ready = bool(model_dir_input) and bool(labels_input) and bool(thresholds_input)
+    if not paths_ready:
+        st.warning("Model dizini ve JSON yollari eksik.")
+        return
+    missing_paths = [p for p in (model_dir_input, labels_input, thresholds_input) if not Path(p).expanduser().exists()]
+    if missing_paths:
+        st.error(
+            "Asagidaki yollar bulunamadi:\n\n"
+            + "\n".join(f"- `{p}`" for p in missing_paths)
+            + "\n\nDogru `model_dir`, `label_columns.json` ve `thresholds_cv.json` yollarini girin "
+            "veya `AFETYONETIMI_MODEL_DIR` ortam degiskenini ayarlayin."
+        )
+        return
+
+    st.markdown("---")
+
+    if "tt_text" not in st.session_state:
+        st.session_state["tt_text"] = ""
+
+    chip_cols = st.columns(len(EXAMPLE_TWEETS))
+    for col, (label, sample) in zip(chip_cols, EXAMPLE_TWEETS):
+        with col:
+            if st.button(label, key=f"tt_chip_{label}", use_container_width=True):
+                st.session_state["tt_text"] = sample
+
+    text = st.text_area(
+        "Tweet / metin",
+        key="tt_text",
+        height=120,
+        placeholder="Ornek: Hatay Antakya'da enkaz altinda kalanlar var, su ve battaniye lazim...",
+    )
+
+    run_col, info_col = st.columns([1.0, 1.6])
+    with run_col:
+        run_clicked = st.button("Tahmin et", type="primary", use_container_width=True)
+    with info_col:
+        st.caption(
+            "Etiketler: arama_kurtarma, saglik, barinma, gida_su, altyapi, "
+            "guvenlik, lojistik, psikolojik, bilgi_paylasimi"
+        )
+
+    if not run_clicked:
+        return
+    if not (text or "").strip():
+        st.warning("Once metni yaz.")
+        return
+
+    try:
+        with st.spinner("Model yukleniyor / tahmin uretiliyor..."):
+            bundle = _cached_load_bundle(
+                model_dir=str(Path(model_dir_input).expanduser()),
+                labels_path=str(Path(labels_input).expanduser()),
+                thresholds_path=str(Path(thresholds_input).expanduser()),
+                max_length=int(max_length),
+                prefer_cpu=bool(prefer_cpu),
+            )
+            result = predict_one(bundle, text, apply_clean=bool(apply_clean))
+    except RuntimeError as e:
+        st.error(str(e))
+        st.info(
+            "Tweet Test sekmesi calisabilmek icin agir bagimliliklara ihtiyac duyar. "
+            "Lokal kurulum:\n\n```\npip install torch transformers\n```"
+        )
+        return
+    except FileNotFoundError as e:
+        st.error(str(e))
+        return
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Tahmin sirasinda hata: {e}")
+        return
+
+    st.markdown(
+        f"<div class='signal-hero'><div class='signal-hero-title'>Tahmin sonucu</div>"
+        f"<div class='signal-hero-sub'>Cihaz: <b>{html.escape(bundle.device)}</b> &middot; "
+        f"max_length=<b>{bundle.max_length}</b> &middot; kaynak: <b>{html.escape(bundle.location.source_label)}</b></div></div>",
+        unsafe_allow_html=True,
+    )
+
+    if result.predicted:
+        chips = " ".join(
+            f"<span class='hero-chip' style='background:rgba(220,38,38,0.18);"
+            f"border-color:rgba(220,38,38,0.55);color:#fecaca;'>"
+            f"{html.escape(pretty_label(lab))}</span>"
+            for lab in result.predicted
+        )
+        st.markdown(
+            f"<div style='margin:0.4rem 0 0.7rem 0;'>Tahmin edilen etiketler: {chips}</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info("Esigi gecen etiket yok (model hicbir kategoriyi yeterince guvenli bulmadi).")
+
+    _render_prediction_chart(result)
+
+    detail_df = pd.DataFrame(
+        {
+            "Etiket": [pretty_label(lab) for lab in result.labels],
+            "Olasilik": [round(float(p), 4) for p in result.probs],
+            "Esik (CV)": [round(float(t), 3) for t in result.thresholds],
+            "Tahmin": ["[X]" if p >= t else "" for p, t in zip(result.probs, result.thresholds)],
+        }
+    ).sort_values("Olasilik", ascending=False)
+    st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+    with st.expander("Model islenen metin (token girisinden once)"):
+        st.code(result.text or "(bos)", language="text")
+
+
 # ---------- BOOT ----------
 
 _inject_styles()
@@ -1445,8 +1700,8 @@ _render_qr_card("Ana model repo", REPO_MAIN)
 st.sidebar.caption("QR kodu telefonunuzla taratabilirsiniz.")
 
 # --- TABS ---
-tab_map, tab_insights, tab_tweets, tab_about = st.tabs(
-    ["Canli Harita", "Icgoruler", "Tweet Listesi", "Hakkinda"]
+tab_map, tab_insights, tab_tweets, tab_test, tab_about = st.tabs(
+    ["Canli Harita", "Icgoruler", "Tweet Listesi", "Tweet Test", "Hakkinda"]
 )
 
 with tab_map:
@@ -1522,6 +1777,9 @@ with tab_tweets:
         columns_to_show = columns_to_show + predicted_columns
         st.dataframe(df_filtered[columns_to_show].head(500), use_container_width=True, hide_index=True)
 
+with tab_test:
+    _render_tweet_test_tab()
+
 with tab_about:
     st.subheader("Proje Hakkinda")
     st.markdown(
@@ -1534,6 +1792,9 @@ with tab_about:
         - **Konum cikarimi**: il / ilce / mahalle seviyesinde
         - **Urgency skoru**: tweet onceligini sayisallastiran kompozit metrik
         - **Canonical v2 final**: en guncel egitim deneyinin tahmin ciktisi
+        - **Tweet Test sekmesi**: kendi yazdiginiz cumleyi modele anlik gonderip
+          per-label olasilik ve CV-tuned esik tahminlerini gorebilirsiniz
+          (yan repo `afetYonetimi_colab` veya `AFETYONETIMI_MODEL_DIR` ile beslenir).
         """
     )
 

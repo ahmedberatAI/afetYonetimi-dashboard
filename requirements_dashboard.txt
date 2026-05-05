@@ -10,3 +10,12 @@ pydeck
 plotly>=5.18
 qrcode[pil]>=7.4
 Pillow
+
+# OPTIONAL - only needed for the "Tweet Test" tab (live single-text inference
+# against the canonical leak-free need-classification model). These libraries
+# are heavy (~2 GB on disk) and are NOT required to view predictions / charts;
+# the rest of the dashboard keeps working when they are missing. Streamlit
+# Community Cloud's per-app memory budget will not fit them along with a
+# ~440 MB model checkpoint, so install them only for local runs.
+#
+# pip install torch transformers
