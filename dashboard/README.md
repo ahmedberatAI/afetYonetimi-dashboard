@@ -1,34 +1,35 @@
 # Dashboard (Streamlit)
 
-This is a lightweight prototype dashboard for exploring model predictions
-without requiring a database.
+This dashboard now targets the **canonical final v2** prediction output and reads the companion metadata JSON when available.
 
-## 1) Create Predictions CSV (Colab Recommended)
+## Expected canonical files
 
-Example (Drive):
+- `need_predictions_geolocated_v2_final.csv`
+- `need_predictions_geolocated_v2_final.meta.json`
 
-```bash
-python scripts/predict_need_classifier.py \
-  --model-dir models/need_classification_silver_63k/final \
-  --input data/processed/emergency_geolocated_96k.csv \
-  --thresholds-json models/need_classification_silver_63k/thresholds.json \
-  --output data/predictions/need_predictions_geolocated_63k.csv \
-  --dedup-by-id
-```
+If the modeling repo sits next to this dashboard repo, the app auto-detects the canonical pair from:
 
-## 2) Run Dashboard (Local)
+- `../afetYonetimi_colab/data/predictions/need_predictions_geolocated_v2_final.csv`
+- `../afetYonetimi_colab/data/predictions/need_predictions_geolocated_v2_final.meta.json`
 
-Install:
+The old `need_predictions_geolocated_63k.csv` file is still readable, but it is shown as a historical preview artifact rather than a canonical output.
+
+## Run locally
 
 ```powershell
 pip install -r requirements_dashboard.txt
-```
-
-Run:
-
-```powershell
 streamlit run dashboard/app.py
 ```
 
-Then set "Predictions CSV yolu" in the sidebar if you saved it elsewhere.
+## Optional repo-local sync
 
+```powershell
+python scripts/sync_canonical_prediction.py --overwrite
+```
+
+Use this when you want the canonical CSV/meta pair copied into `data/predictions/` for a standalone dashboard checkout or Streamlit Cloud deploy.
+
+## Manual override
+
+- Sidebar `Predictions CSV yolu`: point to any compatible CSV
+- Sidebar metadata option: auto-detect `*.meta.json` next to the CSV, or set the JSON path manually

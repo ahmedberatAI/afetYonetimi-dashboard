@@ -3,7 +3,10 @@
 # Install (local):
 #   pip install -r requirements_dashboard.txt
 
-streamlit
+streamlit>=1.30
 pandas
 numpy
 pydeck
+plotly>=5.18
+qrcode[pil]>=7.4
+Pillow
