@@ -77,25 +77,70 @@ Bu script `data/predictions/need_predictions_geolocated_v2_final.*` dosyalarini 
 (`exp3_silver_then_gold_v3_exgold`) ile elle yazilan bir cumlenin 9 ihtiyac
 etiketi icin olasilik ve CV-tuned esik tahminlerini canli sekilde gosterir.
 
-Model artefaktlari (~440 MB) repo icinde tutulmaz; su sirayla aranir:
+Model checkpoint'i (~440 MB) repo icinde tutulmaz. Etiket + esik JSON'lari
+ise kucuk oldugu icin repoya bundle edildi (`data/model_meta/`). Iki dagitim
+modu desteklenir:
 
-1. `AFETYONETIMI_MODEL_DIR` (ve istege bagli `AFETYONETIMI_LABELS_JSON`,
-   `AFETYONETIMI_THRESHOLDS_JSON`) ortam degiskenleri.
-2. Yan repo: `../afetYonetimi_colab/models/exp3_silver_then_gold_v3_exgold/final`
-   ile `label_columns.json` / `thresholds_cv.json`.
-3. Yan reponun `models/final/selection.json` cikti yolu (en yetkili).
-4. Dashboard repo icine elle kopyalanmis bir kopya.
+### Mod A - HuggingFace Hub (Streamlit Cloud icin onerilir)
 
-Ek bagimliliklar (yalnizca bu sekme icin gerekli, varsayilan kurulumda yok):
+1. Modeli HF Hub'a yukle (bir kerelik):
+
+   ```powershell
+   pip install huggingface-hub
+   huggingface-cli login   # token gir (write yetkili)
+
+   huggingface-cli repo create afet-need-classifier --type model
+   huggingface-cli upload `
+     ahmedberatAI/afet-need-classifier `
+     C:\Users\omen\Desktop\afetYonetimi_colab\models\exp3_silver_then_gold_v3_exgold\final `
+     . --repo-type model
+   ```
+
+   Repo herkese acik veya `--private` olabilir; private ise asagiya gore
+   token tanimla.
+
+2. Streamlit Cloud panelinde *Settings -> Secrets*'a ekle:
+
+   ```toml
+   AFETYONETIMI_MODEL_HF_REPO = "ahmedberatAI/afet-need-classifier"
+   # Private repo icin:
+   # AFETYONETIMI_HF_TOKEN = "hf_xxx"
+   ```
+
+   Lokal'de aynisi env var olarak da calisir:
+   `set AFETYONETIMI_MODEL_HF_REPO=ahmedberatAI/afet-need-classifier`.
+
+3. App restart et. Tweet Test sekmesindeki "Model kaynagi" alani otomatik
+   `ahmedberatAI/afet-need-classifier` ile dolar; ilk tahminde checkpoint
+   HF Hub'dan ephemeral diske inip cache'lenir.
+
+### Mod B - Lokal disk
+
+Model artefaktlari su sirayla aranir:
+
+1. `AFETYONETIMI_MODEL_HF_REPO` (HF Hub repo id).
+2. `AFETYONETIMI_MODEL_DIR` (lokal yol). Istege bagli `AFETYONETIMI_LABELS_JSON`,
+   `AFETYONETIMI_THRESHOLDS_JSON` env var'larini ayri tutabilirsin (yoksa
+   `data/model_meta/` icindeki bundle kullanilir).
+3. Yan repo: `../afetYonetimi_colab/models/exp3_silver_then_gold_v3_exgold/final`.
+4. Yan reponun `models/final/selection.json` cikti yolu (en yetkili).
+5. Dashboard repo icine elle kopyalanmis bir kopya.
+
+### Bagimliliklar
+
+`requirements_dashboard.txt` icinde `torch` (CPU build) + `transformers` +
+`huggingface-hub` yer aliyor; Streamlit Cloud kurulumunda otomatik kurulur.
+Lokal'de ekstra islem gerekmez:
 
 ```powershell
-pip install torch transformers
+pip install -r requirements.txt
+streamlit run dashboard/app.py
 ```
 
-Streamlit Community Cloud'da bu sekmeyi calistirmak icin yeterli bellek
-yoktur; yerel calistirma icin tasarlanmistir. Streamlit Cloud kurulumunda
-sekme acilir ama `model_dir` bulunamadigi icin acik bir hata mesaji ile
-kapatilir, geri kalan sekmeler etkilenmez.
+> **Not:** Streamlit Community Cloud'da torch CPU wheel + 442 MB checkpoint
+> + tokenizer toplamda ~750 MB disk + ~700 MB RAM kullanir; free tier
+> uyarilari gelebilir. Memory yetmezse sekme acik bir hata ile kapanir,
+> geri kalan 4 sekme etkilenmez.
 
 ## Streamlit Community Cloud
 

@@ -74,22 +74,28 @@ except ModuleNotFoundError:
 
 try:
     from dashboard.inference import (
+        ENV_HF_REPO,
         ModelBundle,
         ModelLocation,
         PredictionResult,
         describe_candidates,
         discover_model_location,
         load_bundle,
+        looks_like_hf_repo_id,
+        make_user_location,
         predict_one,
     )
 except ModuleNotFoundError:
     from inference import (  # type: ignore[no-redef]
+        ENV_HF_REPO,
         ModelBundle,
         ModelLocation,
         PredictionResult,
         describe_candidates,
         discover_model_location,
         load_bundle,
+        looks_like_hf_repo_id,
+        make_user_location,
         predict_one,
     )
 
@@ -1431,14 +1437,8 @@ EXAMPLE_TWEETS: list[tuple[str, str]] = [
 
 
 @st.cache_resource(show_spinner=False)
-def _cached_load_bundle(model_dir: str, labels_path: str, thresholds_path: str, max_length: int, prefer_cpu: bool) -> ModelBundle:
-    location = ModelLocation(
-        model_dir=Path(model_dir),
-        labels_path=Path(labels_path),
-        thresholds_path=Path(thresholds_path),
-        source_label="user-supplied",
-        note="Streamlit oturumunda yuklendi.",
-    )
+def _cached_load_bundle(model_ref: str, labels_path: str, thresholds_path: str, max_length: int, prefer_cpu: bool) -> ModelBundle:
+    location = make_user_location(model_ref, labels_path, thresholds_path)
     return load_bundle(location, max_length=max_length, prefer_cpu=prefer_cpu)
 
 
@@ -1502,45 +1502,88 @@ def _render_tweet_test_tab() -> None:
     auto_loc = discover_model_location()
     candidates = describe_candidates()
 
-    with st.expander("Model dizini ayarlari", expanded=(auto_loc is None)):
+    with st.expander("Model kaynagi ayarlari", expanded=(auto_loc is None)):
         st.caption(
-            "Model artefaktlari ~440 MB oldugu icin repo icinde tutulmuyor. "
-            "Asagidaki yollar otomatik denenir; istersen elle de gosterebilirsin."
+            "Model checkpoint'i ~440 MB oldugu icin repo icinde tutulmuyor. Iki secenek var: "
+            "**(a)** lokal disk yolu, **(b)** HuggingFace Hub repo id'si "
+            "(`kullanici/repo`). HF Hub modu Streamlit Cloud'da onerilen yontemdir."
         )
         for cand in candidates:
             badge = "[OK]" if cand["exists"] else "[--]"
-            st.markdown(f"- {badge} **{cand['source']}** -> `{cand['model_dir']}`")
+            kind = "HF" if cand.get("is_hf") else "PATH"
+            st.markdown(f"- {badge} `{kind}` **{cand['source']}** -> `{cand['model_dir']}`")
         st.caption(
-            "Ortam degiskenleri: `AFETYONETIMI_MODEL_DIR`, `AFETYONETIMI_LABELS_JSON`, "
-            "`AFETYONETIMI_THRESHOLDS_JSON`."
+            "Ortam degiskenleri / Streamlit secrets: "
+            f"`{ENV_HF_REPO}` (HF repo), `AFETYONETIMI_MODEL_DIR` (lokal yol), "
+            "`AFETYONETIMI_HF_TOKEN` (private repo icin)."
         )
 
-    default_model_dir = str(auto_loc.model_dir) if auto_loc else (candidates[0]["model_dir"] if candidates else "")
+    default_ref = (
+        auto_loc.model_ref
+        if auto_loc is not None
+        else (candidates[0]["model_dir"].removeprefix("hf:") if candidates else "")
+    )
     default_labels = str(auto_loc.labels_path) if auto_loc else (candidates[0]["labels"] if candidates else "")
     default_thresholds = str(auto_loc.thresholds_path) if auto_loc else (candidates[0]["thresholds"] if candidates else "")
 
     cfg_col_a, cfg_col_b = st.columns([1.6, 1.0], gap="medium")
     with cfg_col_a:
-        model_dir_input = st.text_input("Model dizini", value=default_model_dir, key="tt_model_dir")
-        labels_input = st.text_input("label_columns.json", value=default_labels, key="tt_labels")
-        thresholds_input = st.text_input("thresholds_cv.json", value=default_thresholds, key="tt_thr")
+        model_ref_input = st.text_input(
+            "Model kaynagi (HF repo id veya lokal yol)",
+            value=default_ref,
+            key="tt_model_ref",
+            help="Ornek HF: `ahmedberatAI/afet-need-classifier` -- ornek lokal: `C:/.../models/.../final`",
+        )
+        labels_input = st.text_input(
+            "label_columns.json",
+            value=default_labels,
+            key="tt_labels",
+            help="Bos birakirsan repo icindeki bundle (`data/model_meta/label_columns.json`) kullanilir.",
+        )
+        thresholds_input = st.text_input(
+            "thresholds_cv.json",
+            value=default_thresholds,
+            key="tt_thr",
+            help="Bos birakirsan repo icindeki bundle (`data/model_meta/thresholds_cv.json`) kullanilir.",
+        )
     with cfg_col_b:
         max_length = st.slider("Tokenizer max_length", min_value=64, max_value=384, value=192, step=16)
         prefer_cpu = st.checkbox("CPU kullan (GPU varsa bile)", value=False)
         apply_clean = st.checkbox("Metni on-temizle (NFC + whitespace)", value=True)
         st.caption("Metin temizligi `preprocess_emergency_data.clean_text` ile ayni: NFC normalize + whitespace.")
 
-    paths_ready = bool(model_dir_input) and bool(labels_input) and bool(thresholds_input)
-    if not paths_ready:
-        st.warning("Model dizini ve JSON yollari eksik.")
+    if not (model_ref_input or "").strip():
+        st.warning(
+            "Model kaynagi bos. HF Hub'a model yukledikten sonra `kullanici/repo` formatinda "
+            "buraya yaz veya `AFETYONETIMI_MODEL_HF_REPO` Streamlit secret'i tanimla."
+        )
         return
-    missing_paths = [p for p in (model_dir_input, labels_input, thresholds_input) if not Path(p).expanduser().exists()]
-    if missing_paths:
+
+    is_hf_ref = looks_like_hf_repo_id(model_ref_input.strip())
+    if not is_hf_ref:
+        local_path = Path(model_ref_input).expanduser()
+        if not local_path.exists():
+            st.error(
+                f"Lokal yol bulunamadi: `{local_path}`\n\n"
+                "Streamlit Cloud'da yerel disk yok; HF Hub'a model yukleyip "
+                f"`{ENV_HF_REPO}` (veya bu alan) icine `kullanici/repo` formatinda yaz. "
+                "HF Hub yukleme adimlarini README'de gorebilirsin."
+            )
+            return
+
+    # Labels / thresholds: bos = bundle. Yoksa lokal varligi sart.
+    labels_resolved = (Path(labels_input).expanduser() if labels_input else None)
+    thresholds_resolved = (Path(thresholds_input).expanduser() if thresholds_input else None)
+    missing_meta = []
+    if labels_resolved is not None and not labels_resolved.exists():
+        missing_meta.append(str(labels_resolved))
+    if thresholds_resolved is not None and not thresholds_resolved.exists():
+        missing_meta.append(str(thresholds_resolved))
+    if missing_meta:
         st.error(
-            "Asagidaki yollar bulunamadi:\n\n"
-            + "\n".join(f"- `{p}`" for p in missing_paths)
-            + "\n\nDogru `model_dir`, `label_columns.json` ve `thresholds_cv.json` yollarini girin "
-            "veya `AFETYONETIMI_MODEL_DIR` ortam degiskenini ayarlayin."
+            "Asagidaki etiket/esik dosyalari bulunamadi:\n\n"
+            + "\n".join(f"- `{p}`" for p in missing_meta)
+            + "\n\nBu alanlari bos birakirsan repo icindeki bundle (`data/model_meta/`) kullanilir."
         )
         return
 
@@ -1578,11 +1621,20 @@ def _render_tweet_test_tab() -> None:
         return
 
     try:
-        with st.spinner("Model yukleniyor / tahmin uretiliyor..."):
+        spinner_msg = (
+            "HF Hub'dan model indiriliyor / tahmin uretiliyor..."
+            if is_hf_ref
+            else "Model yukleniyor / tahmin uretiliyor..."
+        )
+        with st.spinner(spinner_msg):
             bundle = _cached_load_bundle(
-                model_dir=str(Path(model_dir_input).expanduser()),
-                labels_path=str(Path(labels_input).expanduser()),
-                thresholds_path=str(Path(thresholds_input).expanduser()),
+                model_ref=(
+                    model_ref_input.strip()
+                    if is_hf_ref
+                    else str(Path(model_ref_input).expanduser())
+                ),
+                labels_path=(str(labels_resolved) if labels_resolved else ""),
+                thresholds_path=(str(thresholds_resolved) if thresholds_resolved else ""),
                 max_length=int(max_length),
                 prefer_cpu=bool(prefer_cpu),
             )
