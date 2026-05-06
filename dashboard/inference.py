@@ -4,16 +4,27 @@ This module loads the canonical leak-free need-classification model
 (`exp3_silver_then_gold_v3_exgold`) and produces per-label probabilities and
 threshold-applied predictions for a user-supplied text.
 
+Two delivery modes are supported so the tab works both locally and on
+Streamlit Community Cloud:
+
+1. **Local model directory** - canonical artefacts on disk
+   (`models/exp3_silver_then_gold_v3_exgold/final` in the sibling repo
+   `afetYonetimi_colab`, env override, or a copy inside the dashboard repo).
+2. **HuggingFace Hub repo** - `from_pretrained("user/repo")` downloads on
+   first use and caches on the runtime disk. This is the only option that
+   works on Streamlit Cloud where the 442 MB checkpoint cannot be in git.
+
 Heavy dependencies (`torch`, `transformers`) are imported lazily so the rest
-of the dashboard keeps working when this tab is not used (e.g. on Streamlit
-Community Cloud where the model + libs would exceed the memory budget).
+of the dashboard keeps working when this tab is not used or when those
+libraries are not installed.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -30,21 +41,74 @@ CANONICAL_LABELS_REL = Path("models") / "exp3_silver_then_gold_v3_exgold" / "lab
 CANONICAL_THRESHOLDS_REL = Path("models") / "exp3_silver_then_gold_v3_exgold" / "thresholds_cv.json"
 SELECTION_REL = Path("models") / "final" / "selection.json"
 
+# Bundled meta inside the dashboard repo - tiny JSONs, always available.
+BUNDLED_LABELS_REL = Path("data") / "model_meta" / "label_columns.json"
+BUNDLED_THRESHOLDS_REL = Path("data") / "model_meta" / "thresholds_cv.json"
+
 ENV_MODEL_DIR = "AFETYONETIMI_MODEL_DIR"
 ENV_LABELS_JSON = "AFETYONETIMI_LABELS_JSON"
 ENV_THRESHOLDS_JSON = "AFETYONETIMI_THRESHOLDS_JSON"
+ENV_HF_REPO = "AFETYONETIMI_MODEL_HF_REPO"
+ENV_HF_REVISION = "AFETYONETIMI_MODEL_HF_REVISION"
+ENV_HF_TOKEN = "AFETYONETIMI_HF_TOKEN"  # for private HF repos
+
+_HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*/[A-Za-z0-9][A-Za-z0-9._\-]*$")
+
+
+def _streamlit_secret(name: str) -> str | None:
+    """Best-effort `st.secrets[name]` lookup; never raises if streamlit/secrets missing."""
+    try:
+        import streamlit as st  # type: ignore
+
+        try:
+            value = st.secrets[name]  # type: ignore[index]
+        except Exception:  # noqa: BLE001 - secrets file may not exist
+            return None
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+    except Exception:  # noqa: BLE001 - streamlit not importable in some contexts
+        return None
+
+
+def _resolve_setting(env_name: str) -> str | None:
+    raw = os.environ.get(env_name)
+    if raw and raw.strip():
+        return raw.strip()
+    return _streamlit_secret(env_name)
+
+
+def looks_like_hf_repo_id(value: str) -> bool:
+    """Heuristic: 'user/repo'-shaped without any path separator characters."""
+    if not value:
+        return False
+    if "\\" in value or value.startswith("."):
+        return False
+    if Path(value).expanduser().exists():
+        return False
+    return bool(_HF_REPO_RE.match(value.strip()))
 
 
 @dataclass(frozen=True)
 class ModelLocation:
-    model_dir: Path
+    model_ref: str  # local path string OR HF repo id (e.g. "user/repo")
+    is_hf_repo: bool
     labels_path: Path
     thresholds_path: Path
     source_label: str
     note: str
+    revision: str | None = None
+
+    def model_dir_display(self) -> str:
+        return f"hf:{self.model_ref}" if self.is_hf_repo else self.model_ref
 
     def all_exist(self) -> bool:
-        return self.model_dir.exists() and self.labels_path.exists() and self.thresholds_path.exists()
+        if not (self.labels_path.exists() and self.thresholds_path.exists()):
+            return False
+        if self.is_hf_repo:
+            return True  # remote; assumed reachable, validated at load time
+        return Path(self.model_ref).exists()
 
 
 @dataclass
@@ -56,6 +120,7 @@ class ModelBundle:
     model: Any
     device: str
     max_length: int = 192
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -68,31 +133,76 @@ class PredictionResult:
     model_source: str
 
 
+def _bundled_meta() -> tuple[Path, Path]:
+    repo = dashboard_repo_root()
+    return repo / BUNDLED_LABELS_REL, repo / BUNDLED_THRESHOLDS_REL
+
+
 def _candidate_locations() -> list[ModelLocation]:
     cands: list[ModelLocation] = []
+    bundled_labels, bundled_thr = _bundled_meta()
 
-    env_model = os.environ.get(ENV_MODEL_DIR)
-    env_labels = os.environ.get(ENV_LABELS_JSON)
-    env_thr = os.environ.get(ENV_THRESHOLDS_JSON)
-    if env_model:
-        model_dir = Path(env_model).expanduser()
-        labels = Path(env_labels).expanduser() if env_labels else (model_dir.parent / "label_columns.json")
-        thr = Path(env_thr).expanduser() if env_thr else (model_dir.parent / "thresholds_cv.json")
+    # 1) HF Hub repo via env / Streamlit secrets - works on Cloud.
+    hf_repo = _resolve_setting(ENV_HF_REPO)
+    if hf_repo and looks_like_hf_repo_id(hf_repo):
         cands.append(
             ModelLocation(
-                model_dir=model_dir,
-                labels_path=labels,
-                thresholds_path=thr,
-                source_label="env override",
-                note=f"`{ENV_MODEL_DIR}` ortam degiskeninden cozuldu.",
+                model_ref=hf_repo,
+                is_hf_repo=True,
+                labels_path=bundled_labels,
+                thresholds_path=bundled_thr,
+                source_label=f"HuggingFace Hub ({hf_repo})",
+                note=f"`{ENV_HF_REPO}` ile cozulen HF repo. Etiket+esik repo icindeki bundle'dan.",
+                revision=_resolve_setting(ENV_HF_REVISION),
             )
         )
 
-    # Sibling modeling repo (canonical layout used during local dev).
+    # 2) Local env override.
+    env_model = _resolve_setting(ENV_MODEL_DIR)
+    if env_model:
+        if looks_like_hf_repo_id(env_model):
+            cands.append(
+                ModelLocation(
+                    model_ref=env_model,
+                    is_hf_repo=True,
+                    labels_path=bundled_labels,
+                    thresholds_path=bundled_thr,
+                    source_label=f"HuggingFace Hub ({env_model})",
+                    note=f"`{ENV_MODEL_DIR}` HF repo formatinda algilandi.",
+                    revision=_resolve_setting(ENV_HF_REVISION),
+                )
+            )
+        else:
+            model_dir = Path(env_model).expanduser()
+            env_labels = _resolve_setting(ENV_LABELS_JSON)
+            env_thr = _resolve_setting(ENV_THRESHOLDS_JSON)
+            labels = (
+                Path(env_labels).expanduser()
+                if env_labels
+                else (model_dir.parent / "label_columns.json")
+            )
+            thr = (
+                Path(env_thr).expanduser()
+                if env_thr
+                else (model_dir.parent / "thresholds_cv.json")
+            )
+            cands.append(
+                ModelLocation(
+                    model_ref=str(model_dir),
+                    is_hf_repo=False,
+                    labels_path=labels,
+                    thresholds_path=thr,
+                    source_label="env override",
+                    note=f"`{ENV_MODEL_DIR}` ortam degiskeninden cozuldu.",
+                )
+            )
+
+    # 3) Sibling modeling repo (canonical layout used during local dev).
     sibling = sibling_model_repo_root()
     cands.append(
         ModelLocation(
-            model_dir=sibling / CANONICAL_MODEL_REL,
+            model_ref=str(sibling / CANONICAL_MODEL_REL),
+            is_hf_repo=False,
             labels_path=sibling / CANONICAL_LABELS_REL,
             thresholds_path=sibling / CANONICAL_THRESHOLDS_REL,
             source_label="sibling repo (afetYonetimi_colab)",
@@ -100,7 +210,7 @@ def _candidate_locations() -> list[ModelLocation]:
         )
     )
 
-    # Sibling modeling repo via selection.json (more authoritative).
+    # 4) Sibling modeling repo via selection.json (more authoritative).
     selection_path = sibling / SELECTION_REL
     if selection_path.exists():
         try:
@@ -110,7 +220,8 @@ def _candidate_locations() -> list[ModelLocation]:
             sel_thr = sibling / sel["thresholds_json"]
             cands.append(
                 ModelLocation(
-                    model_dir=sel_model,
+                    model_ref=str(sel_model),
+                    is_hf_repo=False,
                     labels_path=sel_labels,
                     thresholds_path=sel_thr,
                     source_label="sibling repo selection.json",
@@ -120,11 +231,12 @@ def _candidate_locations() -> list[ModelLocation]:
         except Exception:  # noqa: BLE001
             pass
 
-    # Repo-local fallback (if user has copied model into dashboard repo).
+    # 5) Repo-local fallback (model copied into dashboard repo).
     repo_root = dashboard_repo_root()
     cands.append(
         ModelLocation(
-            model_dir=repo_root / CANONICAL_MODEL_REL,
+            model_ref=str(repo_root / CANONICAL_MODEL_REL),
+            is_hf_repo=False,
             labels_path=repo_root / CANONICAL_LABELS_REL,
             thresholds_path=repo_root / CANONICAL_THRESHOLDS_REL,
             source_label="dashboard repo (local copy)",
@@ -135,7 +247,7 @@ def _candidate_locations() -> list[ModelLocation]:
 
 
 def discover_model_location() -> ModelLocation | None:
-    """First candidate whose paths all exist."""
+    """First candidate whose paths all exist (or HF Hub configured)."""
     for cand in _candidate_locations():
         if cand.all_exist():
             return cand
@@ -147,10 +259,11 @@ def describe_candidates() -> list[dict[str, Any]]:
         {
             "source": c.source_label,
             "note": c.note,
-            "model_dir": str(c.model_dir),
+            "model_dir": c.model_dir_display(),
             "labels": str(c.labels_path),
             "thresholds": str(c.thresholds_path),
             "exists": c.all_exist(),
+            "is_hf": c.is_hf_repo,
         }
         for c in _candidate_locations()
     ]
@@ -166,12 +279,54 @@ def clean_tweet_text(text: str) -> str:
     return s.strip()
 
 
+def make_user_location(
+    model_ref: str,
+    labels_path: str | Path | None,
+    thresholds_path: str | Path | None,
+) -> ModelLocation:
+    """Build a `ModelLocation` from a UI-supplied path or HF repo id.
+
+    Falls back to the bundled labels/thresholds JSONs when the user does not
+    override them (typical when pointing at an HF repo that ships only the
+    model + tokenizer files).
+    """
+    bundled_labels, bundled_thr = _bundled_meta()
+    labels_resolved = Path(labels_path).expanduser() if labels_path else bundled_labels
+    thr_resolved = Path(thresholds_path).expanduser() if thresholds_path else bundled_thr
+
+    is_hf = looks_like_hf_repo_id(model_ref)
+    if is_hf:
+        return ModelLocation(
+            model_ref=model_ref.strip(),
+            is_hf_repo=True,
+            labels_path=labels_resolved,
+            thresholds_path=thr_resolved,
+            source_label=f"HuggingFace Hub ({model_ref.strip()})",
+            note="UI uzerinden girilmis HF repo id.",
+            revision=_resolve_setting(ENV_HF_REVISION),
+        )
+    return ModelLocation(
+        model_ref=str(Path(model_ref).expanduser()),
+        is_hf_repo=False,
+        labels_path=labels_resolved,
+        thresholds_path=thr_resolved,
+        source_label="user-supplied path",
+        note="UI uzerinden girilmis lokal yol.",
+    )
+
+
 def load_bundle(location: ModelLocation, *, max_length: int = 192, prefer_cpu: bool = False) -> ModelBundle:
-    if not location.all_exist():
+    if not (location.labels_path.exists() and location.thresholds_path.exists()):
         raise FileNotFoundError(
-            "Model artefaktlari eksik: "
-            f"model_dir={location.model_dir}, labels={location.labels_path}, "
-            f"thresholds={location.thresholds_path}"
+            "Etiket / esik dosyalari eksik: "
+            f"labels={location.labels_path}, thresholds={location.thresholds_path}"
+        )
+    if not location.is_hf_repo and not Path(location.model_ref).exists():
+        raise FileNotFoundError(
+            "Model dizini bulunamadi: "
+            f"{location.model_ref}\n"
+            f"Lokal yol yerine HF Hub kullanmak icin '{ENV_HF_REPO}' ortam degiskenini "
+            "veya UI'daki model_ref alanini 'kullanici/repo' formatinda girin."
         )
 
     try:
@@ -180,7 +335,8 @@ def load_bundle(location: ModelLocation, *, max_length: int = 192, prefer_cpu: b
     except ModuleNotFoundError as e:  # pragma: no cover - environment-dependent
         raise RuntimeError(
             "Tweet Test sekmesi icin `torch` ve `transformers` kurulu olmali. "
-            "Lokal: `pip install torch transformers`."
+            "Lokal: `pip install torch transformers`. Streamlit Cloud icin "
+            "`requirements.txt`'ye eklendiginden emin ol."
         ) from e
 
     labels_data = json.loads(location.labels_path.read_text(encoding="utf-8"))
@@ -199,8 +355,16 @@ def load_bundle(location: ModelLocation, *, max_length: int = 192, prefer_cpu: b
 
     use_cuda = (not prefer_cpu) and bool(getattr(torch.cuda, "is_available", lambda: False)())
     device = "cuda" if use_cuda else "cpu"
-    tokenizer = AutoTokenizer.from_pretrained(str(location.model_dir), use_fast=True)
-    model = AutoModelForSequenceClassification.from_pretrained(str(location.model_dir))
+
+    from_pretrained_kwargs: dict[str, Any] = {}
+    if location.is_hf_repo and location.revision:
+        from_pretrained_kwargs["revision"] = location.revision
+    hf_token = _resolve_setting(ENV_HF_TOKEN) if location.is_hf_repo else None
+    if hf_token:
+        from_pretrained_kwargs["token"] = hf_token
+
+    tokenizer = AutoTokenizer.from_pretrained(location.model_ref, use_fast=True, **from_pretrained_kwargs)
+    model = AutoModelForSequenceClassification.from_pretrained(location.model_ref, **from_pretrained_kwargs)
     model.eval()
     model.to(device)
 
@@ -212,6 +376,7 @@ def load_bundle(location: ModelLocation, *, max_length: int = 192, prefer_cpu: b
         model=model,
         device=device,
         max_length=int(max_length),
+        extras={"hf_token_used": bool(hf_token)},
     )
 
 

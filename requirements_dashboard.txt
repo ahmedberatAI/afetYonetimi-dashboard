@@ -11,11 +11,14 @@ plotly>=5.18
 qrcode[pil]>=7.4
 Pillow
 
-# OPTIONAL - only needed for the "Tweet Test" tab (live single-text inference
-# against the canonical leak-free need-classification model). These libraries
-# are heavy (~2 GB on disk) and are NOT required to view predictions / charts;
-# the rest of the dashboard keeps working when they are missing. Streamlit
-# Community Cloud's per-app memory budget will not fit them along with a
-# ~440 MB model checkpoint, so install them only for local runs.
-#
-# pip install torch transformers
+# Tweet Test sekmesi (live single-text inference) icin gerekli.
+# torch CPU wheel ~200 MB; Streamlit Community Cloud Linux runtime'inda
+# `torch` + `transformers` bu dosyadan otomatik kurulur. Lokal'de GPU/CUDA
+# isteyenler kendi wheel'larini kurabilir; varsayilan CPU build her ikisinde
+# de calisir. Model checkpoint repo icinde tutulmaz: HuggingFace Hub'dan
+# `from_pretrained("user/repo")` ile cekilir veya lokal `AFETYONETIMI_MODEL_DIR`
+# uzerinden gosterilir.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+transformers>=4.40
+huggingface-hub
