@@ -1333,7 +1333,18 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
     with table_col:
         top_n_max = int(min(30, len(aggregated)))
         top_n_default = int(min(10, len(aggregated)))
-        top_n = st.slider("Sicak nokta listesi", min_value=1, max_value=max(1, top_n_max), value=max(1, top_n_default), step=1)
+        if top_n_max <= 1:
+            top_n = top_n_max if top_n_max >= 1 else 0
+            if top_n >= 1:
+                st.caption(f"Sicak nokta listesi: {top_n} kayit")
+        else:
+            top_n = st.slider(
+                "Sicak nokta listesi",
+                min_value=1,
+                max_value=top_n_max,
+                value=max(1, min(top_n_default, top_n_max)),
+                step=1,
+            )
         top_df = aggregated.head(top_n).copy()
         top_df["signal"] = top_df["signal"].round(0).astype(int)
         top_df["pay"] = top_df["share_pct"].map(lambda value: f"{value:.1f}%")
