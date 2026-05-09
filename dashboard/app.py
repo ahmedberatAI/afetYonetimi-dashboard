@@ -3,13 +3,17 @@ import datetime as dt
 import html
 import io
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+
+try:
+    from streamlit_autorefresh import st_autorefresh
+except Exception:
+    st_autorefresh = None
 
 # Streamlit Cloud / `streamlit run dashboard/app.py` ile calistirildiginda
 # `dashboard/` klasoru sys.path'e eklenir ama repo koku eklenmez. Boylece
@@ -998,6 +1002,21 @@ def _render_schema_panel(metadata: dict | None, schema: PredictionSchema, preval
             st.dataframe(prevalence_df, use_container_width=True, hide_index=True)
 
 
+def _advance_timeline_hour(hour_values: list[dt.datetime]) -> None:
+    try:
+        idx = hour_values.index(st.session_state["timeline_hour"])
+    except ValueError:
+        idx = 0
+        st.session_state["timeline_hour"] = hour_values[0]
+
+    if idx < (len(hour_values) - 1):
+        st.session_state["timeline_hour"] = hour_values[idx + 1]
+    elif bool(st.session_state.get("timeline_loop", True)):
+        st.session_state["timeline_hour"] = hour_values[0]
+    else:
+        st.session_state["timeline_playing"] = False
+
+
 def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
     st.subheader("Saatlik Yardim Sinyalleri (Harita)")
     st.markdown(_severity_legend(), unsafe_allow_html=True)
@@ -1018,7 +1037,7 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
         return
 
     if "timeline_playing" not in st.session_state:
-        st.session_state["timeline_playing"] = True  # autoplay default
+        st.session_state["timeline_playing"] = False
     if "timeline_interval_s" not in st.session_state:
         st.session_state["timeline_interval_s"] = 1.2
     if "timeline_loop" not in st.session_state:
@@ -1032,6 +1051,23 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
 
     if "timeline_hour" not in st.session_state or st.session_state["timeline_hour"] not in hour_values:
         st.session_state["timeline_hour"] = hour_values[0]
+
+    if bool(st.session_state.get("timeline_playing", False)) and len(hour_values) > 1:
+        interval_s = float(st.session_state.get("timeline_interval_s", 0.8))
+        interval_s = max(0.2, min(interval_s, 30.0))
+        if st_autorefresh is None:
+            st.warning("Otomatik oynatma icin `streamlit-autorefresh` kurulumu gerekli.")
+            st.session_state["timeline_playing"] = False
+        else:
+            refresh_count = st_autorefresh(interval=int(interval_s * 1000), key="timeline_autorefresh")
+            previous_count = st.session_state.get("timeline_refresh_count")
+            if previous_count is None:
+                st.session_state["timeline_refresh_count"] = refresh_count
+            elif refresh_count != previous_count:
+                st.session_state["timeline_refresh_count"] = refresh_count
+                _advance_timeline_hour(hour_values)
+    else:
+        st.session_state.pop("timeline_refresh_count", None)
 
     c1, c2, c3, c4, c5 = st.columns([2.2, 2.2, 1.7, 1.2, 1.5])
     with c1:
@@ -1398,27 +1434,6 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
         show_df = aggregated[view_cols].copy()
         show_df["share_pct"] = show_df["share_pct"].map(lambda value: round(float(value), 2))
         st.dataframe(show_df, use_container_width=True, hide_index=True)
-
-    if bool(st.session_state.get("timeline_playing", False)) and len(hour_values) > 1:
-        interval_s = float(st.session_state.get("timeline_interval_s", 0.8))
-        interval_s = max(0.05, min(interval_s, 30.0))
-        time.sleep(interval_s)
-
-        try:
-            idx = hour_values.index(st.session_state["timeline_hour"])
-        except ValueError:
-            idx = 0
-            st.session_state["timeline_hour"] = hour_values[0]
-
-        if idx < (len(hour_values) - 1):
-            st.session_state["timeline_pending_hour"] = hour_values[idx + 1]
-        else:
-            if bool(st.session_state.get("timeline_loop", True)):
-                st.session_state["timeline_pending_hour"] = hour_values[0]
-            else:
-                st.session_state["timeline_playing"] = False
-
-        st.rerun()
 
 
 # ---------- TWEET TEST TAB ----------

@@ -10,6 +10,7 @@ pydeck
 plotly>=5.18
 qrcode[pil]>=7.4
 Pillow
+streamlit-autorefresh>=1.0.1
 
 # Tweet Test sekmesi (live single-text inference) icin gerekli.
 # torch CPU wheel ~200 MB; Streamlit Community Cloud Linux runtime'inda
