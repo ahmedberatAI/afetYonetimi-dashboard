@@ -152,7 +152,7 @@ def _candidate_locations() -> list[ModelLocation]:
                 labels_path=bundled_labels,
                 thresholds_path=bundled_thr,
                 source_label=f"HuggingFace Hub ({hf_repo})",
-                note=f"`{ENV_HF_REPO}` ile cozulen HF repo. Etiket+esik repo icindeki bundle'dan.",
+                note=f"`{ENV_HF_REPO}` ile çözülen HF repo. Etiket+eşik repo içindeki bundle'dan.",
                 revision=_resolve_setting(ENV_HF_REVISION),
             )
         )
@@ -168,7 +168,7 @@ def _candidate_locations() -> list[ModelLocation]:
                     labels_path=bundled_labels,
                     thresholds_path=bundled_thr,
                     source_label=f"HuggingFace Hub ({env_model})",
-                    note=f"`{ENV_MODEL_DIR}` HF repo formatinda algilandi.",
+                    note=f"`{ENV_MODEL_DIR}` HF repo formatında algılandı.",
                     revision=_resolve_setting(ENV_HF_REVISION),
                 )
             )
@@ -193,7 +193,7 @@ def _candidate_locations() -> list[ModelLocation]:
                     labels_path=labels,
                     thresholds_path=thr,
                     source_label="env override",
-                    note=f"`{ENV_MODEL_DIR}` ortam degiskeninden cozuldu.",
+                    note=f"`{ENV_MODEL_DIR}` ortam değişkeninden çözüldü.",
                 )
             )
 
@@ -206,7 +206,7 @@ def _candidate_locations() -> list[ModelLocation]:
             labels_path=sibling / CANONICAL_LABELS_REL,
             thresholds_path=sibling / CANONICAL_THRESHOLDS_REL,
             source_label="sibling repo (afetYonetimi_colab)",
-            note="Yan repo `afetYonetimi_colab` icindeki canonical winner artefaktlari.",
+            note="Yan repo `afetYonetimi_colab` içindeki canonical winner artefaktları.",
         )
     )
 
@@ -240,7 +240,7 @@ def _candidate_locations() -> list[ModelLocation]:
             labels_path=repo_root / CANONICAL_LABELS_REL,
             thresholds_path=repo_root / CANONICAL_THRESHOLDS_REL,
             source_label="dashboard repo (local copy)",
-            note="Dashboard repo icine kopyalanmis model artefaktlari.",
+            note="Dashboard repo içine kopyalanmış model artefaktları.",
         )
     )
     return cands
@@ -302,7 +302,7 @@ def make_user_location(
             labels_path=labels_resolved,
             thresholds_path=thr_resolved,
             source_label=f"HuggingFace Hub ({model_ref.strip()})",
-            note="UI uzerinden girilmis HF repo id.",
+            note="UI üzerinden girilmiş HF repo id.",
             revision=_resolve_setting(ENV_HF_REVISION),
         )
     return ModelLocation(
@@ -311,22 +311,22 @@ def make_user_location(
         labels_path=labels_resolved,
         thresholds_path=thr_resolved,
         source_label="user-supplied path",
-        note="UI uzerinden girilmis lokal yol.",
+        note="UI üzerinden girilmiş lokal yol.",
     )
 
 
 def load_bundle(location: ModelLocation, *, max_length: int = 192, prefer_cpu: bool = False) -> ModelBundle:
     if not (location.labels_path.exists() and location.thresholds_path.exists()):
         raise FileNotFoundError(
-            "Etiket / esik dosyalari eksik: "
+            "Etiket / eşik dosyaları eksik: "
             f"labels={location.labels_path}, thresholds={location.thresholds_path}"
         )
     if not location.is_hf_repo and not Path(location.model_ref).exists():
         raise FileNotFoundError(
-            "Model dizini bulunamadi: "
+            "Model dizini bulunamadı: "
             f"{location.model_ref}\n"
-            f"Lokal yol yerine HF Hub kullanmak icin '{ENV_HF_REPO}' ortam degiskenini "
-            "veya UI'daki model_ref alanini 'kullanici/repo' formatinda girin."
+            f"Lokal yol yerine HF Hub kullanmak için '{ENV_HF_REPO}' ortam değişkenini "
+            "veya UI'daki model_ref alanını 'kullanici/repo' formatında girin."
         )
 
     try:
@@ -334,19 +334,19 @@ def load_bundle(location: ModelLocation, *, max_length: int = 192, prefer_cpu: b
         from transformers import AutoModelForSequenceClassification, AutoTokenizer  # type: ignore
     except ModuleNotFoundError as e:  # pragma: no cover - environment-dependent
         raise RuntimeError(
-            "Tweet Test sekmesi icin `torch` ve `transformers` kurulu olmali. "
-            "Lokal: `pip install torch transformers`. Streamlit Cloud icin "
-            "`requirements.txt`'ye eklendiginden emin ol."
+            "Tweet Test sekmesi için `torch` ve `transformers` kurulu olmalı. "
+            "Lokal: `pip install torch transformers`. Streamlit Cloud için "
+            "`requirements.txt`'ye eklendiğinden emin ol."
         ) from e
 
     labels_data = json.loads(location.labels_path.read_text(encoding="utf-8"))
     if not isinstance(labels_data, list) or not labels_data:
-        raise ValueError(f"Etiket listesi bos/bozuk: {location.labels_path}")
+        raise ValueError(f"Etiket listesi boş/bozuk: {location.labels_path}")
     labels = [str(x) for x in labels_data]
 
     thr_data = json.loads(location.thresholds_path.read_text(encoding="utf-8"))
     if not isinstance(thr_data, dict):
-        raise ValueError(f"Thresholds JSON dict olmali: {location.thresholds_path}")
+        raise ValueError(f"Thresholds JSON dict olmalı: {location.thresholds_path}")
     thresholds: dict[str, float] = {}
     for lab in labels:
         if lab not in thr_data:

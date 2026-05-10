@@ -2,6 +2,7 @@ import base64
 import datetime as dt
 import html
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -15,9 +16,9 @@ try:
 except Exception:
     st_autorefresh = None
 
-# Streamlit Cloud / `streamlit run dashboard/app.py` ile calistirildiginda
-# `dashboard/` klasoru sys.path'e eklenir ama repo koku eklenmez. Boylece
-# `from dashboard.utils import ...` ImportError verir. Repo kokunu manuel ekle.
+# Streamlit Cloud / `streamlit run dashboard/app.py` ile çalıştırıldığında
+# `dashboard/` klasörü sys.path'e eklenir ama repo kökü eklenmez. Böylece
+# `from dashboard.utils import ...` ImportError verir. Repo kökünü manuel ekle.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -111,10 +112,31 @@ PLOTLY_TEMPLATE = "plotly_dark"
 PLOTLY_PALETTE = ["#dc2626", "#f97316", "#fbbf24", "#22d3ee", "#60a5fa", "#a78bfa", "#f472b6", "#34d399", "#facc15"]
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().casefold() not in {"0", "false", "no", "off", ""}
+
+
+STAND_MODE = _env_flag("AFETYONETIMI_STAND_MODE", True)
+PRELOAD_MODEL = _env_flag("AFETYONETIMI_PRELOAD_MODEL", STAND_MODE)
+SHOW_TECHNICAL_DETAILS = _env_flag("AFETYONETIMI_SHOW_TECHNICAL_DETAILS", not STAND_MODE)
+
+DEMO_TICKER_ITEMS: list[tuple[str, str, str]] = [
+    ("arama_kurtarma", "Anonim acil çağrı: enkaz altında kalan aile için arama-kurtarma desteği gerekiyor.", "Hatay"),
+    ("gida_su", "Saha notu: toplanma alanında su, bebek maması ve temel gıda ihtiyacı yükseliyor.", "Kahramanmaraş"),
+    ("barinma", "Anonim bildirim: gece için çadır, battaniye ve ısınma desteği talep ediliyor.", "Adıyaman"),
+    ("saglik", "Saha notu: kronik ilaç ve ilk yardım malzemesi ihtiyacı işaretlendi.", "Malatya"),
+    ("lojistik", "Koordinasyon notu: yardım araçları için açık rota ve dağıtım noktası bilgisi gerekiyor.", "Gaziantep"),
+    ("altyapi", "Saha notu: elektrik, iletişim ve yol erişimi kesintileri izleme listesine alındı.", "Hatay"),
+]
+
+
 st.set_page_config(
-    page_title="AfetYonetimi | Ihtiyac Sinyalleri",
+    page_title="AfetYönetimi | İhtiyaç Sinyalleri",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed" if STAND_MODE else "expanded",
     page_icon="🛟",
 )
 
@@ -439,6 +461,46 @@ def _inject_styles() -> None:
         """,
         unsafe_allow_html=True,
     )
+    if STAND_MODE:
+        st.markdown(
+            """
+            <style>
+            #MainMenu, footer, header [data-testid="stToolbar"],
+            [data-testid="stDeployButton"], [data-testid="stDecoration"],
+            [data-testid="stStatusWidget"], [data-testid="collapsedControl"] {
+                display: none !important;
+                visibility: hidden !important;
+            }
+            section[data-testid="stSidebar"] {
+                display: none !important;
+            }
+            .block-container {
+                max-width: 1680px;
+                padding-top: 0.8rem;
+                padding-left: 2.2rem;
+                padding-right: 2.2rem;
+            }
+            .hero {
+                padding: 1.9rem 2.1rem 1.8rem 2.1rem;
+                margin-bottom: 1.2rem;
+            }
+            .hero-left { max-width: 880px; }
+            .hero-title { font-size: 2.45rem; }
+            .hero-sub { font-size: 1.12rem; }
+            .stat-card {
+                min-width: 184px;
+                padding: 1.05rem 1.15rem;
+            }
+            .stat-card .value { font-size: 2.25rem; }
+            .ticker-item { font-size: 0.95rem; }
+            .stTabs [data-baseweb="tab"] {
+                font-size: 1rem;
+                padding: 0.62rem 1.3rem;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 @st.cache_data(show_spinner=False)
@@ -488,6 +550,12 @@ def _qr_data_uri(payload: str) -> str | None:
         return None
 
 
+def _display_path(path: str | Path | None, stand_label: str) -> str:
+    if STAND_MODE:
+        return stand_label
+    return format_path(path)
+
+
 def _filter_df(df: pd.DataFrame, schema: PredictionSchema) -> pd.DataFrame:
     out = df.copy()
 
@@ -504,7 +572,7 @@ def _filter_df(df: pd.DataFrame, schema: PredictionSchema) -> pd.DataFrame:
         min_d = dt.date(2023, 2, 6)
         max_d = dt.date(2023, 2, 13)
 
-    date_range = st.sidebar.date_input("Tarih araligi", value=(min_d, max_d), min_value=min_d, max_value=max_d)
+    date_range = st.sidebar.date_input("Tarih aralığı", value=(min_d, max_d), min_value=min_d, max_value=max_d)
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start, end = date_range
     elif isinstance(date_range, list) and len(date_range) == 2:
@@ -515,13 +583,13 @@ def _filter_df(df: pd.DataFrame, schema: PredictionSchema) -> pd.DataFrame:
 
     if "province" in out.columns:
         provinces = sorted([value for value in out["province"].dropna().unique().tolist() if value])
-        selected_provinces = st.sidebar.multiselect("Il (province)", options=provinces, default=provinces)
+        selected_provinces = st.sidebar.multiselect("İl", options=provinces, default=[])
         if selected_provinces:
             out = out[out["province"].isin(selected_provinces)]
 
     if "district" in out.columns:
         districts = sorted([value for value in out["district"].dropna().unique().tolist() if value])
-        selected_districts = st.sidebar.multiselect("Ilce (district)", options=districts, default=[])
+        selected_districts = st.sidebar.multiselect("İlçe", options=districts, default=[])
         if selected_districts:
             out = out[out["district"].isin(selected_districts)]
 
@@ -535,11 +603,11 @@ def _filter_df(df: pd.DataFrame, schema: PredictionSchema) -> pd.DataFrame:
         urgency_numeric = pd.to_numeric(out["urgency_score"], errors="coerce").fillna(0.0)
         lo = int(np.floor(float(urgency_numeric.min())))
         hi = int(np.ceil(float(urgency_numeric.max())))
-        urgency_min = st.sidebar.slider("Urgency score (min)", min_value=lo, max_value=max(lo, hi), value=lo, step=1)
+        urgency_min = st.sidebar.slider("Aciliyet skoru (min)", min_value=lo, max_value=max(lo, hi), value=lo, step=1)
         out = out[urgency_numeric >= urgency_min]
 
     selected_labels = st.sidebar.multiselect(
-        "Ihtiyac etiketleri",
+        "İhtiyaç etiketleri",
         options=schema.labels,
         default=[],
         format_func=pretty_label,
@@ -553,7 +621,7 @@ def _filter_df(df: pd.DataFrame, schema: PredictionSchema) -> pd.DataFrame:
             else:
                 out = out[out[selected_columns].sum(axis=1) > 0]
 
-    query = st.sidebar.text_input("Metin ara (tweet/tweet_clean)")
+    query = st.sidebar.text_input("Metin ara")
     if query:
         query_lower = query.lower()
         tweet_clean = (
@@ -649,9 +717,9 @@ def _render_source_banner(source_kind: str, metadata: dict | None, default_note:
         meta_line.append(f"Experiment: {metadata['selected_experiment_key']}")
     if metadata and metadata.get("threshold_source"):
         threshold_type = metadata.get("threshold_type", "n/a")
-        meta_line.append(f"Thresholds: {metadata['threshold_source']} / {threshold_type}")
+        meta_line.append(f"Eşikler: {metadata['threshold_source']} / {threshold_type}")
     if metadata and metadata.get("generated_at"):
-        meta_line.append(f"Generated at: {format_generated_at(metadata.get('generated_at'))}")
+        meta_line.append(f"Üretildi: {format_generated_at(metadata.get('generated_at'))}")
 
     meta_text = " | ".join(meta_line)
     banner_body = source_kind_note(source_kind)
@@ -661,7 +729,7 @@ def _render_source_banner(source_kind: str, metadata: dict | None, default_note:
     st.markdown(
         f"""
         <div class="source-banner {banner_class}">
-            <div class="eyebrow">Data Provenance</div>
+            <div class="eyebrow">Veri Provenance</div>
             <div class="title">{html.escape(source_kind_label(source_kind))}</div>
             <div class="body">{html.escape(banner_body)}</div>
             <div class="meta">{html.escape(meta_text)}</div>
@@ -704,10 +772,10 @@ def _render_hero(df_all: pd.DataFrame, df_filtered: pd.DataFrame, schema: Predic
 
     cards = [
         _stat_card_html("Toplam tweet", f"{len(df_all):,}", "blue"),
-        _stat_card_html("Filtrelenmis", f"{len(df_filtered):,}", "purple"),
-        _stat_card_html("Ihtiyac sinyali", f"{any_need_total:,}", "red"),
+        _stat_card_html("Görünen tweet", f"{len(df_filtered):,}", "purple"),
+        _stat_card_html("İhtiyaç sinyali", f"{any_need_total:,}", "red"),
         _stat_card_html("Kapsanan il", f"{province_count}", "green"),
-        _stat_card_html("Ort. urgency", f"{urgency_mean:.2f}", "orange"),
+        _stat_card_html("Ort. aciliyet", f"{urgency_mean:.2f}", "orange"),
         _stat_card_html("En kritik etiket", top_label, "red", delta=f"{top_label_value:,} sinyal" if top_label_value else None),
     ]
 
@@ -715,20 +783,20 @@ def _render_hero(df_all: pd.DataFrame, df_filtered: pd.DataFrame, schema: Predic
     if experiment:
         chip_meta.append(f"Experiment: {experiment}")
     if generated_at:
-        chip_meta.append(f"Uretildi: {generated_at}")
-    chip_meta.append("Veri: 6-13 Subat 2023 | 11 il")
+        chip_meta.append(f"Üretildi: {generated_at}")
+    chip_meta.append("Veri: 5-13 Şubat 2023 | 10 il + konumu belirsiz kayıtlar")
 
     st.markdown(
         f"""
         <div class="hero">
             <div class="hero-grid">
                 <div class="hero-left">
-                    <span class="hero-eyebrow"><span class="pulse"></span> CANLI DEMO  -  AFET YONETIMI</span>
-                    <div class="hero-title">Afet Aciliyet Sinyalleri | Sosyal Medya Tabanli Ihtiyac Tespiti</div>
+                    <span class="hero-eyebrow"><span class="pulse"></span> CANLI DEMO  -  AFET YÖNETİMİ</span>
+                    <div class="hero-title">Afet Aciliyet Sinyalleri | Sosyal Medya Tabanlı İhtiyaç Tespiti</div>
                     <div class="hero-sub">
-                        6 Subat 2023 Kahramanmaras depremi sonrasi atilan tweet'leri 9 ihtiyac kategorisine sinifliyor,
-                        konum cikarimi ile saatlik sicak nokta haritasi uretiyoruz. Amac: kriz aninda en aciliyetli sinyallere
-                        erken yanit verebilmek.
+                        6 Şubat 2023 Kahramanmaraş depremi sonrası atılan tweet'leri 9 ihtiyaç kategorisine sınıflıyor,
+                        konum çıkarımı ile saatlik sıcak nokta haritası üretiyoruz. Amaç: kriz anında en acil sinyallere
+                        erken yanıt verebilmek.
                     </div>
                     <div class="hero-meta">
                         {''.join(f'<span class="hero-chip">{html.escape(c)}</span>' for c in chip_meta)}
@@ -745,6 +813,24 @@ def _render_hero(df_all: pd.DataFrame, df_filtered: pd.DataFrame, schema: Predic
 
 
 def _render_ticker(df: pd.DataFrame, schema: PredictionSchema, max_items: int = 18) -> None:
+    if STAND_MODE:
+        items_html = [
+            f'<span class="ticker-item"><span class="badge b-{html.escape(label)}">'
+            f"{html.escape(pretty_label(label))}</span>"
+            f"<span>{html.escape(text)} | {html.escape(province)}</span></span>"
+            for label, text, province in DEMO_TICKER_ITEMS
+        ]
+        track_html = "".join(items_html)
+        st.markdown(
+            f"""
+            <div class="ticker-wrap">
+                <div class="ticker-track">{track_html}{track_html}{track_html}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
     if df.empty or "tweet_clean" not in df.columns:
         return
 
@@ -803,9 +889,9 @@ def _severity_legend() -> str:
     return (
         '<div class="severity-legend">'
         '<span class="severity-pill"><span class="dot sev-critical" style="background:#7f0000"></span> Kritik (>=p95)</span>'
-        '<span class="severity-pill"><span class="dot sev-high" style="background:#cb181d"></span> Yuksek (>=p80)</span>'
+        '<span class="severity-pill"><span class="dot sev-high" style="background:#cb181d"></span> Yüksek (>=p80)</span>'
         '<span class="severity-pill"><span class="dot sev-medium" style="background:#ef3b2c"></span> Orta (>=p50)</span>'
-        '<span class="severity-pill"><span class="dot sev-watch" style="background:#fd8d3c"></span> Izleme</span>'
+        '<span class="severity-pill"><span class="dot sev-watch" style="background:#fd8d3c"></span> İzleme</span>'
         '</div>'
     )
 
@@ -841,7 +927,7 @@ def _render_qr_card(label: str, url: str) -> None:
 
 def _plot_label_counts(counts_df: pd.DataFrame) -> None:
     if counts_df.empty:
-        st.info("Filtrelenmis veri icin pred_* label dagilimi bulunamadi.")
+        st.info("Görünen veri için pred_* label dağılımı bulunamadı.")
         return
     view = counts_df.copy()
     view["label_pretty"] = view["label"].map(pretty_label)
@@ -853,7 +939,7 @@ def _plot_label_counts(counts_df: pd.DataFrame) -> None:
         )
         fig.update_layout(
             margin=dict(l=10, r=10, t=10, b=10),
-            xaxis_title="Sinyal sayisi", yaxis_title="",
+            xaxis_title="Sinyal sayısı", yaxis_title="",
             yaxis={"categoryorder": "total ascending"},
             coloraxis_showscale=False,
             height=380,
@@ -861,7 +947,7 @@ def _plot_label_counts(counts_df: pd.DataFrame) -> None:
             plot_bgcolor="rgba(0,0,0,0)",
             font_color="#e2e8f0",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.bar_chart(view.set_index("label_pretty")["count"])
 
@@ -873,41 +959,41 @@ def _plot_prevalence(prevalence_df: pd.DataFrame) -> None:
     view["label_pretty"] = view["label"].map(pretty_label)
     if PLOTLY_AVAILABLE:
         fig = go.Figure()
-        fig.add_bar(name="Tum veri (%)", x=view["label_pretty"], y=view["full_rate_pct"], marker_color="#3b82f6")
+        fig.add_bar(name="Tüm veri (%)", x=view["label_pretty"], y=view["full_rate_pct"], marker_color="#3b82f6")
         fig.add_bar(name="Filtreli (%)", x=view["label_pretty"], y=view["filtered_rate_pct"], marker_color="#dc2626")
         fig.update_layout(
             barmode="group", template=PLOTLY_TEMPLATE,
             margin=dict(l=10, r=10, t=30, b=10),
-            xaxis_title="", yaxis_title="Yuzde",
+            xaxis_title="", yaxis_title="Yüzde",
             height=360,
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font_color="#e2e8f0",
             legend=dict(orientation="h", y=1.15),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.bar_chart(view.set_index("label_pretty")[["full_rate_pct", "filtered_rate_pct"]])
 
 
 def _plot_temporal(df: pd.DataFrame) -> None:
     if "date" not in df.columns:
-        st.info("date kolonu yok; zaman serisi cizilemedi.")
+        st.info("date kolonu yok; zaman serisi çizilemedi.")
         return
     timeline = df.groupby("date").size().reset_index(name="count").sort_values("date")
     if timeline.empty:
-        st.info("Zaman serisi icin veri yok.")
+        st.info("Zaman serisi için veri yok.")
         return
     if PLOTLY_AVAILABLE:
         fig = px.area(timeline, x="date", y="count", template=PLOTLY_TEMPLATE)
         fig.update_traces(line_color="#dc2626", fillcolor="rgba(220,38,38,0.3)")
         fig.update_layout(
             margin=dict(l=10, r=10, t=10, b=10),
-            xaxis_title="Tarih", yaxis_title="Tweet sayisi",
+            xaxis_title="Tarih", yaxis_title="Tweet sayısı",
             height=320,
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font_color="#e2e8f0",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.line_chart(timeline.set_index("date")["count"])
 
@@ -927,51 +1013,51 @@ def _render_provenance_panel(
     left_col, right_col = st.columns([1.55, 1.0], gap="large")
     with left_col:
         st.subheader("Model Provenance")
-        st.markdown(f"**Prediction CSV**  \n`{format_path(csv_path)}`")
-        st.markdown(f"**Metadata JSON**  \n`{format_path(meta_path) if meta_path else 'n/a'}`")
+        st.markdown(f"**Tahmin CSV**  \n`{_display_path(csv_path, 'Canonical final tahmin dosyası')}`")
+        st.markdown(f"**Metadata JSON**  \n`{_display_path(meta_path, 'Canonical metadata dosyası') if meta_path else 'n/a'}`")
 
         metric_cols = st.columns(3)
-        metric_cols[0].metric("Rows (CSV)", f"{len(df_all):,}")
-        metric_cols[1].metric("Rows (meta)", f"{int(meta_row_count):,}" if meta_row_count is not None else "n/a")
+        metric_cols[0].metric("Satır (CSV)", f"{len(df_all):,}")
+        metric_cols[1].metric("Satır (meta)", f"{int(meta_row_count):,}" if meta_row_count is not None else "n/a")
         metric_cols[2].metric(
-            "Duplicate removal",
+            "Tekil kayıt farkı",
             f"{int(duplicate_rows_removed):,}" if duplicate_rows_removed is not None else "n/a",
         )
 
         if metadata:
-            st.markdown(f"**Selected experiment key**: `{metadata.get('selected_experiment_key', 'n/a')}`")
-            st.markdown(f"**Selected model dir**: `{metadata.get('model_dir', 'n/a')}`")
+            st.markdown(f"**Seçili experiment key**: `{metadata.get('selected_experiment_key', 'n/a')}`")
+            st.markdown(f"**Seçili model dir**: `{metadata.get('model_dir', 'n/a')}`")
             threshold_source = metadata.get("threshold_source", "n/a")
             threshold_type = metadata.get("threshold_type", "n/a")
-            st.markdown(f"**Threshold source / type**: `{threshold_source}` / `{threshold_type}`")
-            st.markdown(f"**Generated at**: `{format_generated_at(metadata.get('generated_at'))}`")
+            st.markdown(f"**Eşik kaynağı / türü**: `{threshold_source}` / `{threshold_type}`")
+            st.markdown(f"**Üretildi**: `{format_generated_at(metadata.get('generated_at'))}`")
 
             if rows_before is not None and rows_after is not None:
-                st.caption(f"Dedup summary: rows_before={rows_before:,} -> rows_after={rows_after:,}")
+                st.caption(f"Dedup özeti: rows_before={rows_before:,} -> rows_after={rows_after:,}")
 
             if meta_row_count is not None and int(meta_row_count) != len(df_all):
                 st.warning(
-                    f"Metadata row_count ({int(meta_row_count):,}) ile yuklenen CSV satir sayisi ({len(df_all):,}) farkli."
+                    f"Metadata row_count ({int(meta_row_count):,}) ile yüklenen CSV satır sayısı ({len(df_all):,}) farklı."
                 )
         else:
-            st.info("Metadata bulunamadi. Dashboard CSV-only fallback modunda calisiyor.")
+            st.info("Metadata bulunamadı. Dashboard CSV-only fallback modunda çalışıyor.")
 
         if source_kind == "historical":
-            st.warning("Historical 63k preview dosyasi aktif. Bu artifact canonical final output degildir.")
+            st.warning("Historical 63k preview dosyası aktif. Bu artifact canonical final output değildir.")
 
     with right_col:
-        st.subheader("Canonical Limitations")
+        st.subheader("Canonical Sınırlar")
         if source_kind in {"canonical_final", "canonical_candidate"}:
             st.markdown("\n".join([f"- {item}" for item in canonical_limitations(metadata)]))
         elif source_kind == "historical":
             st.markdown(
-                "- Historical 63k preview aktif; canonical experiment metadata'si veya final limitation seti dogrudan bagli degil.\n"
-                "- Bu dosya karsilastirma icin korunuyor, final production output olarak sunulmuyor."
+                "- Historical 63k preview aktif; canonical experiment metadata'si veya final sınır seti doğrudan bağlı değil.\n"
+                "- Bu dosya karşılaştırma için korunuyor, final production output olarak sunulmuyor."
             )
         else:
             st.markdown(
-                "- Custom CSV/meta secildi. Limitations secili dosyanin gercek provenance'ina gore yorumlanmali.\n"
-                "- Metadata saglanirsa canonical riskler ve threshold bilgileri daha guvenli sekilde goruntulenir."
+                "- Custom CSV/meta seçildi. Sınırlar seçili dosyanın gerçek provenance'ına göre yorumlanmalı.\n"
+                "- Metadata sağlanırsa canonical riskler ve threshold bilgileri daha güvenli şekilde görüntülenir."
             )
 
 
@@ -980,9 +1066,9 @@ def _render_schema_panel(metadata: dict | None, schema: PredictionSchema, preval
         if metadata and metadata.get("schema_note"):
             st.caption(metadata.get("schema_note"))
         elif metadata:
-            st.caption("Metadata yuklendi; column mapping metadata'dan okunuyor.")
+            st.caption("Metadata yüklendi; column mapping metadata'dan okunuyor.")
         else:
-            st.caption("Metadata yok; pred/prob kolonlari CSV header'indan kesfedildi.")
+            st.caption("Metadata yok; pred/prob kolonları CSV header'ından keşfedildi.")
 
         schema_rows = []
         meta_pred_positives = metadata.get("pred_positives", {}) if metadata else {}
@@ -995,11 +1081,11 @@ def _render_schema_panel(metadata: dict | None, schema: PredictionSchema, preval
                     "meta_pred_positives": meta_pred_positives.get(label, "n/a"),
                 }
             )
-        st.dataframe(pd.DataFrame(schema_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(schema_rows), width="stretch", hide_index=True)
 
         if not prevalence_df.empty:
             st.caption("Pred prevalence (full dataset vs current filter)")
-            st.dataframe(prevalence_df, use_container_width=True, hide_index=True)
+            st.dataframe(prevalence_df, width="stretch", hide_index=True)
 
 
 def _advance_timeline_hour(hour_values: list[dt.datetime]) -> None:
@@ -1017,12 +1103,32 @@ def _advance_timeline_hour(hour_values: list[dt.datetime]) -> None:
         st.session_state["timeline_playing"] = False
 
 
+def _default_timeline_hour(df: pd.DataFrame, hours: pd.Series, hour_values: list[dt.datetime]) -> dt.datetime:
+    if not STAND_MODE or not hour_values:
+        return hour_values[0]
+
+    frame = pd.DataFrame({"_hour": hours}, index=df.index).dropna(subset=["_hour"])
+    if frame.empty:
+        return hour_values[0]
+
+    if "pred_any_need" in df.columns:
+        positive = pd.to_numeric(df["pred_any_need"], errors="coerce").fillna(0).astype(int) == 1
+        frame = frame[positive.reindex(frame.index).fillna(False)]
+        if frame.empty:
+            frame = pd.DataFrame({"_hour": hours}, index=df.index).dropna(subset=["_hour"])
+
+    counts = frame.groupby("_hour").size().sort_values(ascending=False)
+    if counts.empty:
+        return hour_values[0]
+    return counts.index[0].to_pydatetime()
+
+
 def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
-    st.subheader("Saatlik Yardim Sinyalleri (Harita)")
+    st.subheader("Saatlik Yardım Sinyalleri (Harita)")
     st.markdown(_severity_legend(), unsafe_allow_html=True)
 
     if "created_at_local" not in df.columns or df["created_at_local"].isna().all():
-        st.info("created_at bilgisi yok; saatlik harita olusturulamadi.")
+        st.info("created_at bilgisi yok; saatlik harita oluşturulamadı.")
         return
 
     hours = pd.to_datetime(df["created_at_local"], errors="coerce").dt.floor("h")
@@ -1033,7 +1139,7 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
 
     hour_values = sorted(pd.DatetimeIndex(hours.dropna().unique()).to_pydatetime().tolist())
     if not hour_values:
-        st.info("Saat bilgisi bulunamadi.")
+        st.info("Saat bilgisi bulunamadı.")
         return
 
     if "timeline_playing" not in st.session_state:
@@ -1050,13 +1156,13 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
             st.session_state["timeline_hour"] = pending
 
     if "timeline_hour" not in st.session_state or st.session_state["timeline_hour"] not in hour_values:
-        st.session_state["timeline_hour"] = hour_values[0]
+        st.session_state["timeline_hour"] = _default_timeline_hour(df, hours, hour_values)
 
     if bool(st.session_state.get("timeline_playing", False)) and len(hour_values) > 1:
         interval_s = float(st.session_state.get("timeline_interval_s", 0.8))
         interval_s = max(0.2, min(interval_s, 30.0))
         if st_autorefresh is None:
-            st.warning("Otomatik oynatma icin `streamlit-autorefresh` kurulumu gerekli.")
+            st.warning("Otomatik oynatma için `streamlit-autorefresh` kurulumu gerekli.")
             st.session_state["timeline_playing"] = False
         else:
             refresh_count = st_autorefresh(interval=int(interval_s * 1000), key="timeline_autorefresh")
@@ -1074,28 +1180,27 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
         loc_level = st.selectbox("Konum seviyesi", options=["neighborhood", "district", "province"], index=0)
     with c2:
         signal_mode = st.selectbox(
-            "Sinyal gucu",
+            "Sinyal gücü",
             options=["count_rows", "count_any_need", "sum_urgency"],
             index=1 if "pred_any_need" in df.columns else 0,
             format_func={
-                "count_rows": "Tweet sayisi (filtreli)",
-                "count_any_need": "Any-need tweet sayisi (pred_any_need=1)",
+                "count_rows": "Tweet sayısı",
+                "count_any_need": "İhtiyaç sinyali sayısı (pred_any_need=1)",
                 "sum_urgency": "Urgency toplam (urgency_score)",
             }.get,
         )
     with c3:
         st.slider(
-            "Oynatma hizi (sn)",
+            "Oynatma hızı (sn)",
             min_value=0.2,
             max_value=5.0,
-            value=float(st.session_state["timeline_interval_s"]),
             step=0.1,
             key="timeline_interval_s",
         )
     with c4:
-        st.checkbox("Loop", value=bool(st.session_state["timeline_loop"]), key="timeline_loop")
+        st.checkbox("Döngü", key="timeline_loop")
     with c5:
-        st.checkbox("Heatmap", value=bool(st.session_state["timeline_show_heatmap"]), key="timeline_show_heatmap")
+        st.checkbox("Isı haritası", key="timeline_show_heatmap")
 
     if loc_level == "province":
         group_cols = ["province"]
@@ -1133,25 +1238,25 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
         st.session_state["timeline_hour"] = hour_values[0]
 
     with b1:
-        if st.button("Prev", use_container_width=True):
+        if st.button("Önceki", width="stretch"):
             st.session_state["timeline_playing"] = False
             st.session_state["timeline_hour"] = hour_values[max(0, cur_idx - 1)]
             st.rerun()
     with b2:
-        button_label = "Pause" if st.session_state["timeline_playing"] else "Play"
-        if st.button(button_label, use_container_width=True):
+        button_label = "Duraklat" if st.session_state["timeline_playing"] else "Oynat"
+        if st.button(button_label, width="stretch"):
             st.session_state["timeline_playing"] = not bool(st.session_state["timeline_playing"])
             st.rerun()
     with b3:
-        if st.button("Next", use_container_width=True):
+        if st.button("Sonraki", width="stretch"):
             st.session_state["timeline_playing"] = False
             st.session_state["timeline_hour"] = hour_values[min(len(hour_values) - 1, cur_idx + 1)]
             st.rerun()
     with b4:
-        st.caption(f"Hours: {len(hour_values)}")
+        st.caption(f"Saat sayısı: {len(hour_values)}")
 
     st.select_slider(
-        "Saat sec (hour-by-hour)",
+        "Saat seç",
         options=hour_values,
         key="timeline_hour",
         format_func=lambda value: value.strftime("%Y-%m-%d %H:00"),
@@ -1211,13 +1316,13 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
     total_hotspots_before_geo = len(aggregated)
     aggregated = aggregated.dropna(subset=["lat", "lon"]).reset_index(drop=True)
     if aggregated.empty:
-        st.info("Harita icin koordinat eslesmesi bulunamadi (gazetteer yok veya eslesme dusuk).")
+        st.info("Harita için koordinat eşleşmesi bulunamadı (gazetteer yok veya eşleşme düşük).")
         return
 
     aggregated["signal"] = pd.to_numeric(aggregated["signal"], errors="coerce").fillna(0.0)
     aggregated = aggregated[aggregated["signal"] > 0].sort_values("signal", ascending=False).reset_index(drop=True)
     if aggregated.empty:
-        st.info("Haritada gosterilecek pozitif sinyal bulunamadi.")
+        st.info("Haritada gösterilecek pozitif sinyal bulunamadı.")
         return
 
     total_signal = float(aggregated["signal"].sum())
@@ -1231,10 +1336,10 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
         if value >= q95:
             return "Kritik"
         if value >= q80:
-            return "Yuksek"
+            return "Yüksek"
         if value >= q50:
             return "Orta"
-        return "Izleme"
+        return "İzleme"
 
     def _signal_color(value: float) -> list[int]:
         if value >= q95:
@@ -1281,7 +1386,7 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
             return None
         diff = current - previous
         if previous == 0:
-            return f"{diff:+.{decimals}f} (onceki saat 0)"
+            return f"{diff:+.{decimals}f} (önceki saat 0)"
         pct = (diff / previous) * 100.0
         return f"{diff:+.{decimals}f} ({pct:+.1f}%)"
 
@@ -1290,7 +1395,7 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
     st.markdown(
         f"""
         <div class="signal-hero">
-            <div class="signal-hero-title">Saatlik Ihtiyac Sinyalleri Analizi</div>
+            <div class="signal-hero-title">Saatlik İhtiyaç Sinyalleri Analizi</div>
             <div class="signal-hero-sub">
                 Saat: {selected_hour.strftime("%Y-%m-%d %H:00")} | En kritik nokta: {html.escape(top_location)} (sinyal: {top_signal:.0f})
             </div>
@@ -1302,17 +1407,17 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Toplam sinyal", f"{int(total_signal):,}", delta=_delta_text(total_signal, prev_total_signal, 0))
     m2.metric(
-        "Sicak nokta",
+        "Sıcak nokta",
         f"{int(len(aggregated)):,}",
         delta=_delta_text(float(len(aggregated)), float(prev_hotspots) if prev_hotspots is not None else None, 0),
     )
     m3.metric("Tepe sinyal", f"{top_signal:.0f}")
     geo_match = (len(aggregated) / total_hotspots_before_geo) * 100.0 if total_hotspots_before_geo else 0.0
-    m4.metric("Koordinat kapsami", f"{geo_match:.1f}%")
+    m4.metric("Koordinat kapsamı", f"{geo_match:.1f}%")
 
     map_col, table_col = st.columns([1.7, 1.0], gap="large")
     with map_col:
-        radius_scale = st.slider("Nokta boyutu carpani", min_value=500, max_value=22000, value=6500, step=500)
+        radius_scale = st.slider("Nokta boyutu çarpanı", min_value=500, max_value=22000, value=6500, step=500)
         aggregated["radius"] = (np.sqrt(aggregated["signal"].clip(lower=0.0)) * float(radius_scale)).clip(lower=1000.0)
 
         center_lat = float(aggregated["lat"].mean())
@@ -1361,9 +1466,9 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
             layers=layers,
             tooltip=tooltip,
         )
-        st.pydeck_chart(deck, use_container_width=True)
+        st.pydeck_chart(deck, width="stretch")
         st.caption(
-            "Gosterim; secili saatteki sinyal yogunlugunu (renk), buyuklugunu (cap) ve hotspot oncelik seviyesini birlikte sunar."
+            "Gösterim; seçili saatteki sinyal yoğunluğunu (renk), büyüklüğünü (çap) ve hotspot öncelik seviyesini birlikte sunar."
         )
 
     with table_col:
@@ -1372,10 +1477,10 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
         if top_n_max <= 1:
             top_n = top_n_max if top_n_max >= 1 else 0
             if top_n >= 1:
-                st.caption(f"Sicak nokta listesi: {top_n} kayit")
+                st.caption(f"Sıcak nokta listesi: {top_n} kayıt")
         else:
             top_n = st.slider(
-                "Sicak nokta listesi",
+                "Sıcak nokta listesi",
                 min_value=1,
                 max_value=top_n_max,
                 value=max(1, min(top_n_default, top_n_max)),
@@ -1387,14 +1492,14 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
         st.dataframe(
             top_df[["rank", "location_label", "signal", "pay", "severity"]].rename(
                 columns={
-                    "rank": "Sira",
+                    "rank": "Sıra",
                     "location_label": "Konum",
                     "signal": "Sinyal",
                     "pay": "Pay",
                     "severity": "Seviye",
                 }
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1413,7 +1518,7 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 font_color="#e2e8f0",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.bar_chart(top_df[["location_label", "signal"]].set_index("location_label"))
 
@@ -1426,14 +1531,14 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
                     label_rows.append({"label": pretty_label(label), "count": count})
         if label_rows:
             label_df = pd.DataFrame(label_rows).sort_values("count", ascending=False).head(6)
-            st.caption("Saatlik ihtiyac etiketleri")
-            st.dataframe(label_df, use_container_width=True, hide_index=True)
+            st.caption("Saatlik ihtiyaç etiketleri")
+            st.dataframe(label_df, width="stretch", hide_index=True)
 
-    with st.expander("Saatlik sinyal tablosu (detayli)"):
+    with st.expander("Saatlik sinyal tablosu (detaylı)"):
         view_cols = ["rank", "location_label", "signal", "share_pct", "severity", "lat", "lon"]
         show_df = aggregated[view_cols].copy()
         show_df["share_pct"] = show_df["share_pct"].map(lambda value: round(float(value), 2))
-        st.dataframe(show_df, use_container_width=True, hide_index=True)
+        st.dataframe(show_df, width="stretch", hide_index=True)
 
 
 # ---------- TWEET TEST TAB ----------
@@ -1441,23 +1546,23 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
 EXAMPLE_TWEETS: list[tuple[str, str]] = [
     (
         "Arama-kurtarma",
-        "Hatay Antakya Sumerler mahallesi enkaz altinda kaldik lutfen yardim",
+        "Hatay Antakya Sümerler mahallesi enkaz altında kaldık lütfen yardım",
     ),
     (
-        "Gida & su",
-        "Kahramanmaras Dulkadiroglu Yorukselim mah. su ve yiyecek kalmadi cok ihtiyacimiz var",
+        "Gıda & su",
+        "Kahramanmaraş Dulkadiroğlu Yörükselim mah. su ve yiyecek kalmadı çok ihtiyacımız var",
     ),
     (
-        "Barinma",
-        "Adiyaman merkez evimiz hasarli cadira ihtiyac var ailecek disardayiz",
+        "Barınma",
+        "Adıyaman merkez evimiz hasarlı çadıra ihtiyaç var ailecek dışarıdayız",
     ),
     (
-        "Saglik",
-        "Gaziantep Sehitkamil yarali var insulin lazim acil saglik ekibi cagiriyoruz",
+        "Sağlık",
+        "Gaziantep Şehitkamil yaralı var insülin lazım acil sağlık ekibi çağırıyoruz",
     ),
     (
-        "Bilgi paylasimi",
-        "Malatya Yesilyurt'tan haber alamiyoruz iletisim yok lutfen ulaaabilen olursa paylassin",
+        "Bilgi paylaşımı",
+        "Malatya Yeşilyurt'tan haber alamıyoruz iletişim yok lütfen ulaşabilen olursa paylaşsın",
     ),
 ]
 
@@ -1488,7 +1593,7 @@ def _render_prediction_chart(result: PredictionResult) -> None:
             y=df["label_pretty"],
             orientation="h",
             marker_color=bar_colors,
-            name="Olasilik",
+            name="Olasılık",
             hovertemplate="<b>%{y}</b><br>prob=%{x:.3f}<extra></extra>",
         )
         fig.add_trace(
@@ -1497,14 +1602,14 @@ def _render_prediction_chart(result: PredictionResult) -> None:
                 y=df["label_pretty"],
                 mode="markers",
                 marker=dict(symbol="line-ns", color="#fbbf24", size=18, line=dict(width=2, color="#fbbf24")),
-                name="Esik (CV)",
+                name="Eşik (CV)",
                 hovertemplate="<b>%{y}</b><br>thr=%{x:.3f}<extra></extra>",
             )
         )
         fig.update_layout(
             template=PLOTLY_TEMPLATE,
             margin=dict(l=10, r=10, t=20, b=10),
-            xaxis=dict(title="Olasilik (sigmoid)", range=[0, 1]),
+            xaxis=dict(title="Olasılık (sigmoid)", range=[0, 1]),
             yaxis=dict(title=""),
             height=380,
             paper_bgcolor="rgba(0,0,0,0)",
@@ -1512,37 +1617,21 @@ def _render_prediction_chart(result: PredictionResult) -> None:
             font_color="#e2e8f0",
             legend=dict(orientation="h", y=1.12),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.bar_chart(df.set_index("label_pretty")["prob"])
 
 
 def _render_tweet_test_tab() -> None:
-    st.subheader("Tweet Test - Canli Etiket Tahmini")
+    st.subheader("Tweet Test - Canlı Etiket Tahmini")
     st.caption(
-        "Bir tweet ya da kisa metin yazin; canonical leak-free model "
-        "(`exp3_silver_then_gold_v3_exgold`) 9 ihtiyac etiketi icin olasilik ve "
-        "CV-tuned esiklere gore tahmin uretsin."
+        "Bir tweet ya da kısa metin yazın; canonical leak-free model "
+        "(`exp3_silver_then_gold_v3_exgold`) 9 ihtiyaç etiketi için olasılık ve "
+        "CV-tuned eşiklere göre tahmin üretsin."
     )
 
     auto_loc = discover_model_location()
     candidates = describe_candidates()
-
-    with st.expander("Model kaynagi ayarlari", expanded=(auto_loc is None)):
-        st.caption(
-            "Model checkpoint'i ~440 MB oldugu icin repo icinde tutulmuyor. Iki secenek var: "
-            "**(a)** lokal disk yolu, **(b)** HuggingFace Hub repo id'si "
-            "(`kullanici/repo`). HF Hub modu Streamlit Cloud'da onerilen yontemdir."
-        )
-        for cand in candidates:
-            badge = "[OK]" if cand["exists"] else "[--]"
-            kind = "HF" if cand.get("is_hf") else "PATH"
-            st.markdown(f"- {badge} `{kind}` **{cand['source']}** -> `{cand['model_dir']}`")
-        st.caption(
-            "Ortam degiskenleri / Streamlit secrets: "
-            f"`{ENV_HF_REPO}` (HF repo), `AFETYONETIMI_MODEL_DIR` (lokal yol), "
-            "`AFETYONETIMI_HF_TOKEN` (private repo icin)."
-        )
 
     default_ref = (
         auto_loc.model_ref
@@ -1552,36 +1641,63 @@ def _render_tweet_test_tab() -> None:
     default_labels = str(auto_loc.labels_path) if auto_loc else (candidates[0]["labels"] if candidates else "")
     default_thresholds = str(auto_loc.thresholds_path) if auto_loc else (candidates[0]["thresholds"] if candidates else "")
 
-    cfg_col_a, cfg_col_b = st.columns([1.6, 1.0], gap="medium")
-    with cfg_col_a:
-        model_ref_input = st.text_input(
-            "Model kaynagi (HF repo id veya lokal yol)",
-            value=default_ref,
-            key="tt_model_ref",
-            help="Ornek HF: `ahmedberatAI/afet-need-classifier` -- ornek lokal: `C:/.../models/.../final`",
-        )
-        labels_input = st.text_input(
-            "label_columns.json",
-            value=default_labels,
-            key="tt_labels",
-            help="Bos birakirsan repo icindeki bundle (`data/model_meta/label_columns.json`) kullanilir.",
-        )
-        thresholds_input = st.text_input(
-            "thresholds_cv.json",
-            value=default_thresholds,
-            key="tt_thr",
-            help="Bos birakirsan repo icindeki bundle (`data/model_meta/thresholds_cv.json`) kullanilir.",
-        )
-    with cfg_col_b:
-        max_length = st.slider("Tokenizer max_length", min_value=64, max_value=384, value=192, step=16)
-        prefer_cpu = st.checkbox("CPU kullan (GPU varsa bile)", value=False)
-        apply_clean = st.checkbox("Metni on-temizle (NFC + whitespace)", value=True)
-        st.caption("Metin temizligi `preprocess_emergency_data.clean_text` ile ayni: NFC normalize + whitespace.")
+    if STAND_MODE:
+        model_ref_input = default_ref
+        labels_input = default_labels
+        thresholds_input = default_thresholds
+        max_length = 192
+        prefer_cpu = False
+        apply_clean = True
+        if auto_loc is None:
+            st.warning("Canlı tahmin modeli bulunamadı. Stand sunumu öncesi model yolu veya HF repo ayarlanmalı.")
+            return
+    else:
+        with st.expander("Model kaynağı ayarları", expanded=(auto_loc is None)):
+            st.caption(
+                "Model checkpoint'i ~440 MB olduğu için repo içinde tutulmuyor. İki seçenek var: "
+                "**(a)** lokal disk yolu, **(b)** HuggingFace Hub repo id'si "
+                "(`kullanici/repo`). HF Hub modu Streamlit Cloud'da önerilen yöntemdir."
+            )
+            for cand in candidates:
+                badge = "[OK]" if cand["exists"] else "[--]"
+                kind = "HF" if cand.get("is_hf") else "PATH"
+                st.markdown(f"- {badge} `{kind}` **{cand['source']}** -> `{cand['model_dir']}`")
+            st.caption(
+                "Ortam değişkenleri / Streamlit secrets: "
+                f"`{ENV_HF_REPO}` (HF repo), `AFETYONETIMI_MODEL_DIR` (lokal yol), "
+                "`AFETYONETIMI_HF_TOKEN` (private repo için)."
+            )
+
+        cfg_col_a, cfg_col_b = st.columns([1.6, 1.0], gap="medium")
+        with cfg_col_a:
+            model_ref_input = st.text_input(
+                "Model kaynağı (HF repo id veya lokal yol)",
+                value=default_ref,
+                key="tt_model_ref",
+                help="Örnek HF: `ahmedberatAI/afet-need-classifier` -- örnek lokal: `C:/.../models/.../final`",
+            )
+            labels_input = st.text_input(
+                "label_columns.json",
+                value=default_labels,
+                key="tt_labels",
+                help="Boş bırakırsan repo içindeki bundle (`data/model_meta/label_columns.json`) kullanılır.",
+            )
+            thresholds_input = st.text_input(
+                "thresholds_cv.json",
+                value=default_thresholds,
+                key="tt_thr",
+                help="Boş bırakırsan repo içindeki bundle (`data/model_meta/thresholds_cv.json`) kullanılır.",
+            )
+        with cfg_col_b:
+            max_length = st.slider("Tokenizer max_length", min_value=64, max_value=384, value=192, step=16)
+            prefer_cpu = st.checkbox("CPU kullan (GPU varsa bile)", value=False)
+            apply_clean = st.checkbox("Metni ön-temizle (NFC + whitespace)", value=True)
+            st.caption("Metin temizliği `preprocess_emergency_data.clean_text` ile aynı: NFC normalize + whitespace.")
 
     if not (model_ref_input or "").strip():
         st.warning(
-            "Model kaynagi bos. HF Hub'a model yukledikten sonra `kullanici/repo` formatinda "
-            "buraya yaz veya `AFETYONETIMI_MODEL_HF_REPO` Streamlit secret'i tanimla."
+            "Model kaynağı boş. HF Hub'a model yükledikten sonra `kullanici/repo` formatında "
+            "buraya yaz veya `AFETYONETIMI_MODEL_HF_REPO` Streamlit secret'i tanımla."
         )
         return
 
@@ -1590,14 +1706,14 @@ def _render_tweet_test_tab() -> None:
         local_path = Path(model_ref_input).expanduser()
         if not local_path.exists():
             st.error(
-                f"Lokal yol bulunamadi: `{local_path}`\n\n"
-                "Streamlit Cloud'da yerel disk yok; HF Hub'a model yukleyip "
-                f"`{ENV_HF_REPO}` (veya bu alan) icine `kullanici/repo` formatinda yaz. "
-                "HF Hub yukleme adimlarini README'de gorebilirsin."
+                f"Lokal yol bulunamadı: `{local_path}`\n\n"
+                "Streamlit Cloud'da yerel disk yok; HF Hub'a model yükleyip "
+                f"`{ENV_HF_REPO}` (veya bu alan) içine `kullanici/repo` formatında yaz. "
+                "HF Hub yükleme adımlarını README'de görebilirsin."
             )
             return
 
-    # Labels / thresholds: bos = bundle. Yoksa lokal varligi sart.
+    # Labels / thresholds: boş = bundle. Yoksa lokal varlığı şart.
     labels_resolved = (Path(labels_input).expanduser() if labels_input else None)
     thresholds_resolved = (Path(thresholds_input).expanduser() if thresholds_input else None)
     missing_meta = []
@@ -1607,11 +1723,40 @@ def _render_tweet_test_tab() -> None:
         missing_meta.append(str(thresholds_resolved))
     if missing_meta:
         st.error(
-            "Asagidaki etiket/esik dosyalari bulunamadi:\n\n"
+            "Aşağıdaki etiket/eşik dosyaları bulunamadı:\n\n"
             + "\n".join(f"- `{p}`" for p in missing_meta)
-            + "\n\nBu alanlari bos birakirsan repo icindeki bundle (`data/model_meta/`) kullanilir."
+            + "\n\nBu alanları boş bırakırsan repo içindeki bundle (`data/model_meta/`) kullanılır."
         )
         return
+
+    if STAND_MODE and PRELOAD_MODEL:
+        prewarm_key = "|".join(
+            [
+                model_ref_input.strip(),
+                str(labels_resolved) if labels_resolved else "",
+                str(thresholds_resolved) if thresholds_resolved else "",
+                str(max_length),
+                str(prefer_cpu),
+            ]
+        )
+        if st.session_state.get("tt_prewarm_key") != prewarm_key:
+            try:
+                with st.spinner("Canlı tahmin modeli hazırlanıyor..."):
+                    _cached_load_bundle(
+                        model_ref=(model_ref_input.strip() if is_hf_ref else str(Path(model_ref_input).expanduser())),
+                        labels_path=(str(labels_resolved) if labels_resolved else ""),
+                        thresholds_path=(str(thresholds_resolved) if thresholds_resolved else ""),
+                        max_length=int(max_length),
+                        prefer_cpu=bool(prefer_cpu),
+                    )
+                st.session_state["tt_prewarm_key"] = prewarm_key
+                st.session_state.pop("tt_prewarm_error", None)
+            except Exception as e:  # noqa: BLE001
+                st.session_state["tt_prewarm_error"] = str(e)
+        if st.session_state.get("tt_prewarm_error"):
+            st.warning("Canlı tahmin modeli henüz hazır değil; model ayarları kontrol edilmeli.")
+        elif st.session_state.get("tt_prewarm_key") == prewarm_key:
+            st.caption("Canlı tahmin modeli hazır; örnek metinlerden biriyle anında test edebilirsiniz.")
 
     st.markdown("---")
 
@@ -1621,19 +1766,19 @@ def _render_tweet_test_tab() -> None:
     chip_cols = st.columns(len(EXAMPLE_TWEETS))
     for col, (label, sample) in zip(chip_cols, EXAMPLE_TWEETS):
         with col:
-            if st.button(label, key=f"tt_chip_{label}", use_container_width=True):
+            if st.button(label, key=f"tt_chip_{label}", width="stretch"):
                 st.session_state["tt_text"] = sample
 
     text = st.text_area(
         "Tweet / metin",
         key="tt_text",
         height=120,
-        placeholder="Ornek: Hatay Antakya'da enkaz altinda kalanlar var, su ve battaniye lazim...",
+        placeholder="Örnek: Hatay Antakya'da enkaz altında kalanlar var, su ve battaniye lazım...",
     )
 
     run_col, info_col = st.columns([1.0, 1.6])
     with run_col:
-        run_clicked = st.button("Tahmin et", type="primary", use_container_width=True)
+        run_clicked = st.button("Tahmin et", type="primary", width="stretch")
     with info_col:
         st.caption(
             "Etiketler: arama_kurtarma, saglik, barinma, gida_su, altyapi, "
@@ -1643,14 +1788,14 @@ def _render_tweet_test_tab() -> None:
     if not run_clicked:
         return
     if not (text or "").strip():
-        st.warning("Once metni yaz.")
+        st.warning("Önce metni yaz.")
         return
 
     try:
         spinner_msg = (
-            "HF Hub'dan model indiriliyor / tahmin uretiliyor..."
+            "HF Hub'dan model indiriliyor / tahmin üretiliyor..."
             if is_hf_ref
-            else "Model yukleniyor / tahmin uretiliyor..."
+            else "Model yükleniyor / tahmin üretiliyor..."
         )
         with st.spinner(spinner_msg):
             bundle = _cached_load_bundle(
@@ -1668,7 +1813,7 @@ def _render_tweet_test_tab() -> None:
     except RuntimeError as e:
         st.error(str(e))
         st.info(
-            "Tweet Test sekmesi calisabilmek icin agir bagimliliklara ihtiyac duyar. "
+            "Tweet Test sekmesi çalışabilmek için ağır bağımlılıklara ihtiyaç duyar. "
             "Lokal kurulum:\n\n```\npip install torch transformers\n```"
         )
         return
@@ -1676,13 +1821,20 @@ def _render_tweet_test_tab() -> None:
         st.error(str(e))
         return
     except Exception as e:  # noqa: BLE001
-        st.error(f"Tahmin sirasinda hata: {e}")
+        st.error(f"Tahmin sırasında hata: {e}")
         return
 
+    result_sub = (
+        "Canonical model &middot; CV ayarlı eşikler &middot; stand modu"
+        if STAND_MODE
+        else (
+            f"Cihaz: <b>{html.escape(bundle.device)}</b> &middot; "
+            f"max_length=<b>{bundle.max_length}</b> &middot; kaynak: <b>{html.escape(bundle.location.source_label)}</b>"
+        )
+    )
     st.markdown(
         f"<div class='signal-hero'><div class='signal-hero-title'>Tahmin sonucu</div>"
-        f"<div class='signal-hero-sub'>Cihaz: <b>{html.escape(bundle.device)}</b> &middot; "
-        f"max_length=<b>{bundle.max_length}</b> &middot; kaynak: <b>{html.escape(bundle.location.source_label)}</b></div></div>",
+        f"<div class='signal-hero-sub'>{result_sub}</div></div>",
         unsafe_allow_html=True,
     )
 
@@ -1698,22 +1850,22 @@ def _render_tweet_test_tab() -> None:
             unsafe_allow_html=True,
         )
     else:
-        st.info("Esigi gecen etiket yok (model hicbir kategoriyi yeterince guvenli bulmadi).")
+        st.info("Eşiği geçen etiket yok (model hiçbir kategoriyi yeterince güvenli bulmadı).")
 
     _render_prediction_chart(result)
 
     detail_df = pd.DataFrame(
         {
             "Etiket": [pretty_label(lab) for lab in result.labels],
-            "Olasilik": [round(float(p), 4) for p in result.probs],
-            "Esik (CV)": [round(float(t), 3) for t in result.thresholds],
+            "Olasılık": [round(float(p), 4) for p in result.probs],
+            "Eşik (CV)": [round(float(t), 3) for t in result.thresholds],
             "Tahmin": ["[X]" if p >= t else "" for p, t in zip(result.probs, result.thresholds)],
         }
-    ).sort_values("Olasilik", ascending=False)
-    st.dataframe(detail_df, use_container_width=True, hide_index=True)
+    ).sort_values("Olasılık", ascending=False)
+    st.dataframe(detail_df, width="stretch", hide_index=True)
 
-    with st.expander("Model islenen metin (token girisinden once)"):
-        st.code(result.text or "(bos)", language="text")
+    with st.expander("Model işlenen metin (token girişinden önce)"):
+        st.code(result.text or "(boş)", language="text")
 
 
 # ---------- BOOT ----------
@@ -1722,31 +1874,35 @@ _inject_styles()
 
 default_source = discover_default_source()
 
-st.sidebar.markdown("### Veri Kaynagi")
-st.sidebar.caption(f"Otomatik varsayilan: {default_source.label}")
-st.sidebar.caption(default_source.note)
+if SHOW_TECHNICAL_DETAILS:
+    st.sidebar.markdown("### Veri Kaynağı")
+    st.sidebar.caption(f"Otomatik varsayılan: {default_source.label}")
+    st.sidebar.caption(default_source.note)
 
-csv_path_input = st.sidebar.text_input("Predictions CSV yolu", value=str(default_source.csv_path))
-auto_meta = st.sidebar.checkbox("CSV yanindaki metadata dosyasini otomatik ara", value=True)
+    csv_path_input = st.sidebar.text_input("Tahmin CSV yolu", value=str(default_source.csv_path))
+    auto_meta = st.sidebar.checkbox("CSV yanındaki metadata dosyasını otomatik ara", value=True)
 
-manual_meta_default = str(default_source.meta_path) if default_source.meta_path else ""
-manual_meta_input = ""
-if not auto_meta:
-    manual_meta_input = st.sidebar.text_input("Metadata JSON yolu", value=manual_meta_default)
+    manual_meta_default = str(default_source.meta_path) if default_source.meta_path else ""
+    manual_meta_input = ""
+    if not auto_meta:
+        manual_meta_input = st.sidebar.text_input("Metadata JSON yolu", value=manual_meta_default)
 
-resolved_meta_path = infer_meta_path(csv_path_input) if auto_meta else (Path(manual_meta_input).expanduser() if manual_meta_input else None)
-if auto_meta and resolved_meta_path is not None:
-    st.sidebar.caption(f"Metadata path: {format_path(resolved_meta_path)}")
+    resolved_meta_path = infer_meta_path(csv_path_input) if auto_meta else (Path(manual_meta_input).expanduser() if manual_meta_input else None)
+    if auto_meta and resolved_meta_path is not None:
+        st.sidebar.caption(f"Metadata path: {format_path(resolved_meta_path)}")
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Filtreler")
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Filtreler")
+else:
+    csv_path_input = str(default_source.csv_path)
+    resolved_meta_path = default_source.meta_path if default_source.meta_path else infer_meta_path(csv_path_input)
 
 df_all: pd.DataFrame | None = None
 try:
-    with st.spinner("Tahminler yukleniyor..."):
+    with st.spinner("Tahminler yükleniyor..."):
         df_all = load_predictions_csv(csv_path_input)
 except FileNotFoundError:
-    st.error(f"Dosya bulunamadi: {csv_path_input}")
+    st.error(f"Dosya bulunamadı: {csv_path_input}")
     df_all = None
 
 if df_all is None or df_all.empty:
@@ -1763,7 +1919,7 @@ except OSError:
     default_csv_resolved = str(default_source.csv_path)
 banner_note = default_source.note if active_csv_resolved == default_csv_resolved else ""
 
-df_filtered = _filter_df(df_all, schema)
+df_filtered = _filter_df(df_all, schema) if SHOW_TECHNICAL_DETAILS else df_all.copy()
 
 # --- HERO + TICKER ---
 _render_hero(df_all, df_filtered, schema, metadata)
@@ -1771,37 +1927,38 @@ _render_ticker(df_filtered if not df_filtered.empty else df_all, schema)
 _render_source_banner(source_kind, metadata, banner_note)
 
 # --- SIDEBAR LINKS / QR ---
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Proje Linkleri")
-_render_qr_card("Dashboard repo", REPO_DASHBOARD)
-_render_qr_card("Ana model repo", REPO_MAIN)
-st.sidebar.caption("QR kodu telefonunuzla taratabilirsiniz.")
+if SHOW_TECHNICAL_DETAILS:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Proje Linkleri")
+    _render_qr_card("Dashboard repo", REPO_DASHBOARD)
+    _render_qr_card("Ana model repo", REPO_MAIN)
+    st.sidebar.caption("QR kodu telefonunuzla taratabilirsiniz.")
 
 # --- TABS ---
 tab_map, tab_insights, tab_tweets, tab_test, tab_about = st.tabs(
-    ["Canli Harita", "Icgoruler", "Tweet Listesi", "Tweet Test", "Hakkinda"]
+    ["Canlı Harita", "İçgörüler", "Tweet Listesi", "Tweet Test", "Hakkında"]
 )
 
 with tab_map:
     if df_filtered.empty:
-        st.warning("Secili filtrelerle eslesen satir yok. Filtreleri sidebar'dan gevsetin.")
+        st.warning("Seçili filtrelerle eşleşen satır yok. Filtreleri sidebar'dan gevşetin.")
     else:
         _hourly_signal_map(df_filtered, schema)
 
-        st.subheader("Il Bazli Yogunluk (Centroid)")
+        st.subheader("İl Bazlı Yoğunluk (Centroid)")
         province_map_df = _province_map_df(df_filtered)
         if province_map_df.empty:
-            st.info("Harita icin province -> (lat, lon) eslesmesi bulunamadi.")
+            st.info("Harita için province -> (lat, lon) eşleşmesi bulunamadı.")
         else:
             map_col, table_col = st.columns([1.6, 1.0], gap="large")
             with map_col:
                 if PLOTLY_AVAILABLE:
-                    fig = px.scatter_mapbox(
+                    fig = px.scatter_map(
                         province_map_df, lat="lat", lon="lon", size="count", color="count",
                         hover_name="province",
                         color_continuous_scale=["#fbbf24", "#dc2626"],
                         size_max=55, zoom=5.4,
-                        mapbox_style="carto-darkmatter",
+                        map_style="carto-darkmatter",
                     )
                     fig.update_layout(
                         margin=dict(l=0, r=0, t=0, b=0),
@@ -1809,42 +1966,42 @@ with tab_map:
                         paper_bgcolor="rgba(0,0,0,0)",
                         font_color="#e2e8f0",
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                 else:
                     st.map(province_map_df)
             with table_col:
                 st.dataframe(
                     province_map_df.sort_values("count", ascending=False)[["province", "count"]].rename(
-                        columns={"province": "Il", "count": "Tweet"}
+                        columns={"province": "İl", "count": "Tweet"}
                     ),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
 with tab_insights:
-    st.subheader("Etiket Prevalansi")
+    st.subheader("Etiket Prevalansı")
     prevalence_df = _label_prevalence(df_all, df_filtered, metadata, schema)
     _plot_prevalence(prevalence_df)
 
     chart_col_a, chart_col_b = st.columns([1.1, 1.0], gap="large")
     with chart_col_a:
-        st.subheader("Etiket Dagilimi (Filtreli)")
+        st.subheader("Etiket Dağılımı")
         filtered_counts = _label_counts(df_filtered, schema) if not df_filtered.empty else pd.DataFrame(columns=["label", "count"])
         _plot_label_counts(filtered_counts)
     with chart_col_b:
-        st.subheader("Zamansal Dagilim")
+        st.subheader("Zamansal Dağılım")
         _plot_temporal(df_filtered if not df_filtered.empty else df_all)
 
     if not prevalence_df.empty:
         st.caption("Tablo: full vs filtreli oranlar")
         prevalence_view = prevalence_df.copy()
         prevalence_view["label"] = prevalence_view["label"].map(pretty_label)
-        st.dataframe(prevalence_view, use_container_width=True, hide_index=True)
+        st.dataframe(prevalence_view, width="stretch", hide_index=True)
 
 with tab_tweets:
     st.subheader("Tweet Listesi")
     if df_filtered.empty:
-        st.info("Secili filtrelerle eslesen tweet yok.")
+        st.info("Seçili filtrelerle eşleşen tweet yok.")
     else:
         columns_to_show = [
             column
@@ -1853,25 +2010,25 @@ with tab_tweets:
         ]
         predicted_columns = [schema.label_to_pred[label] for label in schema.labels if label in schema.label_to_pred]
         columns_to_show = columns_to_show + predicted_columns
-        st.dataframe(df_filtered[columns_to_show].head(500), use_container_width=True, hide_index=True)
+        st.dataframe(df_filtered[columns_to_show].head(500), width="stretch", hide_index=True)
 
 with tab_test:
     _render_tweet_test_tab()
 
 with tab_about:
-    st.subheader("Proje Hakkinda")
+    st.subheader("Proje Hakkında")
     st.markdown(
         """
-        **Afet Yonetimi - Sosyal Medya Tabanli Ihtiyac Sinyalleri** projesi, 6 Subat 2023 Kahramanmaras
-        depremi sirasinda atilan tweet'lerden ihtiyac kategorilerini cikarmayi ve konum bilgisi ile
-        birlestirip saatlik sicak nokta haritasi uretmeyi hedefler.
+        **Afet Yönetimi - Sosyal Medya Tabanlı İhtiyaç Sinyalleri** projesi, 6 Şubat 2023 Kahramanmaraş
+        depremi sırasında atılan tweet'lerden ihtiyaç kategorilerini çıkarmayı ve konum bilgisi ile
+        birleştirip saatlik sıcak nokta haritası üretmeyi hedefler.
 
-        - **9 ihtiyac etiketi**: arama_kurtarma, saglik, barinma, gida_su, altyapi, guvenlik, lojistik, psikolojik, bilgi_paylasimi
-        - **Konum cikarimi**: il / ilce / mahalle seviyesinde
-        - **Urgency skoru**: tweet onceligini sayisallastiran kompozit metrik
-        - **Canonical v2 final**: en guncel egitim deneyinin tahmin ciktisi
-        - **Tweet Test sekmesi**: kendi yazdiginiz cumleyi modele anlik gonderip
-          per-label olasilik ve CV-tuned esik tahminlerini gorebilirsiniz
+        - **9 ihtiyaç etiketi**: arama_kurtarma, saglik, barinma, gida_su, altyapi, guvenlik, lojistik, psikolojik, bilgi_paylasimi
+        - **Konum çıkarımı**: il / ilçe / mahalle seviyesinde
+        - **Urgency skoru**: tweet önceliğini sayısallaştıran kompozit metrik
+        - **Canonical v2 final**: en güncel eğitim deneyinin tahmin çıktısı
+        - **Tweet Test sekmesi**: kendi yazdığınız cümleyi modele anlık gönderip
+          per-label olasılık ve CV-tuned eşik tahminlerini görebilirsiniz
           (yan repo `afetYonetimi_colab` veya `AFETYONETIMI_MODEL_DIR` ile beslenir).
         """
     )
@@ -1880,7 +2037,7 @@ with tab_about:
     with qr_a:
         _render_qr_card("Dashboard repo (UI)", REPO_DASHBOARD)
     with qr_b:
-        _render_qr_card("Ana model repo (egitim & analiz)", REPO_MAIN)
+        _render_qr_card("Ana model repo (eğitim & analiz)", REPO_MAIN)
 
     st.markdown("---")
     _render_provenance_panel(

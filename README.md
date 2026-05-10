@@ -48,6 +48,25 @@ pip install -r requirements.txt
 streamlit run dashboard/app.py
 ```
 
+## Stand / Sunum Modu
+
+Dashboard varsayilan olarak stand modunda acilir: teknik sidebar, yerel dosya
+yollari ve Streamlit chrome'u gizlenir; harita en yogun saatten baslar ve
+Tweet Test modeli onceden isitilir. Gelistirme/teknik kontrol icin eski
+sidebar'li modu acmak istersen:
+
+```powershell
+$env:AFETYONETIMI_STAND_MODE=0
+streamlit run dashboard/app.py
+```
+
+Tweet Test modelini acilista isitmak istemezsen:
+
+```powershell
+$env:AFETYONETIMI_PRELOAD_MODEL=0
+streamlit run dashboard/app.py
+```
+
 ## Canonical Local Example
 
 Iki repo yan yana ise ek bir kopya gerekmiyor. Dashboard otomatik olarak su dosyalari kullanir:

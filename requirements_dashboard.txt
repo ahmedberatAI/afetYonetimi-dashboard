@@ -3,7 +3,7 @@
 # Install (local):
 #   pip install -r requirements_dashboard.txt
 
-streamlit>=1.30
+streamlit>=1.56
 pandas
 numpy
 pydeck

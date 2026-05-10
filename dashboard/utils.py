@@ -118,21 +118,21 @@ def discover_default_source() -> SourceDescriptor:
                 meta_path=infer_meta_path(local_canonical_csv),
                 default_kind="canonical_final",
                 label="Canonical final (dashboard-local copy)",
-                note="Repo-local canonical CSV/meta pair.",
+                note="Repo-local canonical CSV/meta çifti.",
             ),
             SourceDescriptor(
                 csv_path=sibling_canonical_csv,
                 meta_path=infer_meta_path(sibling_canonical_csv),
                 default_kind="canonical_final",
                 label="Canonical final (sibling project repo)",
-                note="Auto-detected from the sibling modeling repo.",
+                note="Yan modelleme reposundan otomatik algılandı.",
             ),
             SourceDescriptor(
                 csv_path=historical_csv,
                 meta_path=infer_meta_path(historical_csv),
                 default_kind="historical",
                 label="Historical 63k preview",
-                note="Fallback only; superseded by canonical v2 final output.",
+                note="Yalnızca fallback; canonical v2 final output bunun yerini aldı.",
             ),
         ]
     )
@@ -165,22 +165,22 @@ def classify_prediction_source(csv_path: str | Path, metadata: dict[str, Any] | 
 
 def source_kind_label(source_kind: str) -> str:
     if source_kind == "canonical_final":
-        return "Canonical final output"
+        return "Canonical final çıktı"
     if source_kind == "canonical_candidate":
-        return "Canonical-named file (metadata missing)"
+        return "Canonical adlı dosya (metadata eksik)"
     if source_kind == "historical":
         return "Historical preview artifact"
-    return "Custom prediction file"
+    return "Özel tahmin dosyası"
 
 
 def source_kind_note(source_kind: str) -> str:
     if source_kind == "canonical_final":
-        return "Canonical leak-free final prediction output is active."
+        return "Canonical leak-free final tahmin çıktısı aktif."
     if source_kind == "canonical_candidate":
-        return "File name matches the canonical artifact, but metadata is missing so provenance cannot be fully verified."
+        return "Dosya adı canonical artifact ile eşleşiyor; metadata eksik olduğu için provenance tam doğrulanamıyor."
     if source_kind == "historical":
-        return "Historical preview is active. It is preserved for comparison, not as the canonical final output."
-    return "Custom CSV/meta pair is active. Provenance depends on the selected files."
+        return "Historical preview aktif. Karşılaştırma için korunur, canonical final çıktı olarak sunulmaz."
+    return "Özel CSV/meta çifti aktif. Provenance seçili dosyalara bağlıdır."
 
 
 def maybe_fix_mojibake(value: Any) -> str:
@@ -235,8 +235,21 @@ def format_generated_at(value: Any) -> str:
     return ts.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+LABEL_DISPLAY = {
+    "arama_kurtarma": "arama kurtarma",
+    "saglik": "sağlık",
+    "barinma": "barınma",
+    "gida_su": "gıda su",
+    "altyapi": "altyapı",
+    "guvenlik": "güvenlik",
+    "lojistik": "lojistik",
+    "psikolojik": "psikolojik",
+    "bilgi_paylasimi": "bilgi paylaşımı",
+}
+
+
 def pretty_label(label: str) -> str:
-    return label.replace("_", " ")
+    return LABEL_DISPLAY.get(label, label.replace("_", " "))
 
 
 def canonical_limitations(metadata: dict[str, Any] | None) -> list[str]:
@@ -245,10 +258,10 @@ def canonical_limitations(metadata: dict[str, Any] | None) -> list[str]:
         overlap_note = metadata["content_overlap_audit_artifact"].get("note")
 
     return [
-        "`guvenlik` ve `bilgi_paylasimi` canonical winner'in acik zayif etiketleri; mevcut CV threshold'lari recall'u tutucu tutuyor.",
-        "Rare labels (`altyapi`, `psikolojik`, `saglik`, `guvenlik`) cok kucuk test destegiyle olculdugu icin skorlar hizla sature olabilir.",
+        "`guvenlik` ve `bilgi_paylasimi` canonical winner'ın açık zayıf etiketleri; mevcut CV threshold'ları recall'u tutucu tutuyor.",
+        "Rare labels (`altyapi`, `psikolojik`, `saglik`, `guvenlik`) çok küçük test desteğiyle ölçüldüğü için skorlar hızla satüre olabilir.",
         overlap_note
-        or "Id-level leak kapatildi, ancak normalized-text overlap kaynakli residual risk hala dokumante edilmis durumda.",
+        or "Id-level leak kapatıldı, ancak normalized-text overlap kaynaklı residual risk hala dokümante edilmiş durumda.",
     ]
 
 
