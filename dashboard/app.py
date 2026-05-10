@@ -4,17 +4,13 @@ import html
 import io
 import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
-
-try:
-    from streamlit_autorefresh import st_autorefresh
-except Exception:
-    st_autorefresh = None
 
 # Streamlit Cloud / `streamlit run dashboard/app.py` ile çalıştırıldığında
 # `dashboard/` klasörü sys.path'e eklenir ama repo kökü eklenmez. Böylece
@@ -1101,6 +1097,7 @@ def _advance_timeline_hour(hour_values: list[dt.datetime]) -> None:
         st.session_state["timeline_hour"] = hour_values[0]
     else:
         st.session_state["timeline_playing"] = False
+        st.session_state.pop("timeline_last_tick", None)
 
 
 def _default_timeline_hour(df: pd.DataFrame, hours: pd.Series, hour_values: list[dt.datetime]) -> dt.datetime:
@@ -1124,6 +1121,20 @@ def _default_timeline_hour(df: pd.DataFrame, hours: pd.Series, hour_values: list
 
 
 def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
+    if bool(st.session_state.get("timeline_playing", False)):
+        interval_s = float(st.session_state.get("timeline_interval_s", 1.2))
+        interval_s = max(0.8, min(interval_s, 5.0))
+
+        @st.fragment(run_every=interval_s)
+        def _autoplay_fragment() -> None:
+            _render_hourly_signal_map(df, schema, auto_advance=True)
+
+        _autoplay_fragment()
+    else:
+        _render_hourly_signal_map(df, schema, auto_advance=False)
+
+
+def _render_hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema, *, auto_advance: bool) -> None:
     st.subheader("Saatlik Yardım Sinyalleri (Harita)")
     st.markdown(_severity_legend(), unsafe_allow_html=True)
 
@@ -1158,22 +1169,18 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
     if "timeline_hour" not in st.session_state or st.session_state["timeline_hour"] not in hour_values:
         st.session_state["timeline_hour"] = _default_timeline_hour(df, hours, hour_values)
 
-    if bool(st.session_state.get("timeline_playing", False)) and len(hour_values) > 1:
-        interval_s = float(st.session_state.get("timeline_interval_s", 0.8))
-        interval_s = max(0.2, min(interval_s, 30.0))
-        if st_autorefresh is None:
-            st.warning("Otomatik oynatma için `streamlit-autorefresh` kurulumu gerekli.")
-            st.session_state["timeline_playing"] = False
-        else:
-            refresh_count = st_autorefresh(interval=int(interval_s * 1000), key="timeline_autorefresh")
-            previous_count = st.session_state.get("timeline_refresh_count")
-            if previous_count is None:
-                st.session_state["timeline_refresh_count"] = refresh_count
-            elif refresh_count != previous_count:
-                st.session_state["timeline_refresh_count"] = refresh_count
-                _advance_timeline_hour(hour_values)
-    else:
-        st.session_state.pop("timeline_refresh_count", None)
+    interval_s = float(st.session_state.get("timeline_interval_s", 1.2))
+    interval_s = max(0.8, min(interval_s, 5.0))
+    if bool(st.session_state.get("timeline_playing", False)) and auto_advance and len(hour_values) > 1:
+        now = time.monotonic()
+        previous_tick = st.session_state.get("timeline_last_tick")
+        if previous_tick is None:
+            st.session_state["timeline_last_tick"] = now
+        elif (now - float(previous_tick)) >= interval_s:
+            _advance_timeline_hour(hour_values)
+            st.session_state["timeline_last_tick"] = now
+    elif not bool(st.session_state.get("timeline_playing", False)):
+        st.session_state.pop("timeline_last_tick", None)
 
     c1, c2, c3, c4, c5 = st.columns([2.2, 2.2, 1.7, 1.2, 1.5])
     with c1:
@@ -1192,7 +1199,7 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
     with c3:
         st.slider(
             "Oynatma hızı (sn)",
-            min_value=0.2,
+            min_value=0.8,
             max_value=5.0,
             step=0.1,
             key="timeline_interval_s",
@@ -1240,16 +1247,23 @@ def _hourly_signal_map(df: pd.DataFrame, schema: PredictionSchema) -> None:
     with b1:
         if st.button("Önceki", width="stretch"):
             st.session_state["timeline_playing"] = False
+            st.session_state.pop("timeline_last_tick", None)
             st.session_state["timeline_hour"] = hour_values[max(0, cur_idx - 1)]
             st.rerun()
     with b2:
         button_label = "Duraklat" if st.session_state["timeline_playing"] else "Oynat"
         if st.button(button_label, width="stretch"):
-            st.session_state["timeline_playing"] = not bool(st.session_state["timeline_playing"])
+            next_playing = not bool(st.session_state["timeline_playing"])
+            st.session_state["timeline_playing"] = next_playing
+            if next_playing:
+                st.session_state["timeline_last_tick"] = time.monotonic()
+            else:
+                st.session_state.pop("timeline_last_tick", None)
             st.rerun()
     with b3:
         if st.button("Sonraki", width="stretch"):
             st.session_state["timeline_playing"] = False
+            st.session_state.pop("timeline_last_tick", None)
             st.session_state["timeline_hour"] = hour_values[min(len(hour_values) - 1, cur_idx + 1)]
             st.rerun()
     with b4:
