@@ -53,6 +53,20 @@ ENV_HF_REVISION = "AFETYONETIMI_MODEL_HF_REVISION"
 ENV_HF_TOKEN = "AFETYONETIMI_HF_TOKEN"  # for private HF repos
 
 _HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*/[A-Za-z0-9][A-Za-z0-9._\-]*$")
+INFO_POSTPROCESS_MIN_PROB = 0.20
+INFO_MISSING_RE = re.compile(
+    r"(haber\s+alam|haber\s+al[ıi]nam|ula[şs]am[ıi]yor|ula[şs][ıi]lam[ıi]yor)",
+    flags=re.IGNORECASE,
+)
+INFO_REQUEST_RE = re.compile(
+    r"(g[oö]ren|duyan|bilen|bilgisi\s+olan|bilgi\s+alan|haber\s+alan|ula[şs]s[ıi]n|yazs[ıi]n|bildirsin)",
+    flags=re.IGNORECASE,
+)
+INFO_CONTACT_RE = re.compile(r"(ileti[şs]im|irtibat|telefon|numara|0\d{10}|05\d{9})", flags=re.IGNORECASE)
+INFO_ANNOUNCEMENT_RE = re.compile(
+    r"(duyuru|canl[ıi]\s+yay[ıi]n|transfer|da[ğg][ıi]t[ıi]m|ula[şs]t[ıi]r[ıi]ld[ıi]|bildirilsin)",
+    flags=re.IGNORECASE,
+)
 
 
 def _streamlit_secret(name: str) -> str | None:
@@ -279,6 +293,24 @@ def clean_tweet_text(text: str) -> str:
     return s.strip()
 
 
+def _has_info_postprocess_signal(text: str) -> bool:
+    t = clean_tweet_text(text).casefold()
+    missing = bool(INFO_MISSING_RE.search(t))
+    request = bool(INFO_REQUEST_RE.search(t))
+    contact = bool(INFO_CONTACT_RE.search(t))
+    announcement = bool(INFO_ANNOUNCEMENT_RE.search(t))
+    return (missing and request) or (missing and contact) or (request and contact) or announcement
+
+
+def _apply_info_v1_postprocess(text: str, labels: list[str], probs: np.ndarray, predicted: list[str]) -> list[str]:
+    if "bilgi_paylasimi" not in labels or "bilgi_paylasimi" in predicted:
+        return predicted
+    j = labels.index("bilgi_paylasimi")
+    if probs[j] >= INFO_POSTPROCESS_MIN_PROB and _has_info_postprocess_signal(text):
+        return predicted + ["bilgi_paylasimi"]
+    return predicted
+
+
 def make_user_location(
     model_ref: str,
     labels_path: str | Path | None,
@@ -407,6 +439,7 @@ def predict_one(bundle: ModelBundle, text: str, *, apply_clean: bool = True) -> 
     probs = _sigmoid(logits)[0].astype(np.float32)
     thr_vec = np.array([bundle.thresholds[lab] for lab in bundle.labels], dtype=np.float32)
     predicted = [lab for lab, p, t in zip(bundle.labels, probs, thr_vec) if p >= t]
+    predicted = _apply_info_v1_postprocess(cleaned, bundle.labels, probs, predicted)
     return PredictionResult(
         text=cleaned,
         labels=list(bundle.labels),

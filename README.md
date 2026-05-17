@@ -89,6 +89,11 @@ Bu script `data/predictions/need_predictions_geolocated_v2_final.*` dosyalarini 
 `Tweet Test` sekmesi, kanonik leak-free model
 (`exp3_silver_then_gold_v3_exgold`) ile elle yazilan bir cumlenin 9 ihtiyac
 etiketi icin olasilik ve CV-tuned esik tahminlerini canli sekilde gosterir.
+Dashboard, modelleme reposunda OOF + validation ile dogrulanan `info_v1`
+postprocess profilini de uygular: guclu bilgi-paylasimi dili varsa ve
+`prob_bilgi_paylasimi >= 0.20` ise `bilgi_paylasimi` etiketi eklenir. Exact
+raw-threshold davranisi icin `AFETYONETIMI_DISABLE_INFO_POSTPROCESS=1`
+ortam degiskeni kullanilabilir.
 
 Model checkpoint'i (~440 MB) repo icinde tutulmaz. Etiket + esik JSON'lari
 ise kucuk oldugu icin repoya bundle edildi (`data/model_meta/`). Iki dagitim

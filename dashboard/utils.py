@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,20 @@ CANONICAL_CSV_NAME = "need_predictions_geolocated_v2_final.csv"
 CANONICAL_META_NAME = "need_predictions_geolocated_v2_final.meta.json"
 UNKNOWN_LOCATION_VALUES = {"", "na", "n/a", "nan", "none", "null", "unknown", "<na>"}
 MOJIBAKE_TOKENS = ("\u00c3", "\u00c4", "\u00c5", "\u00e2", "\ufffd")
+INFO_POSTPROCESS_MIN_PROB = 0.20
+INFO_MISSING_RE = re.compile(
+    r"(haber\s+alam|haber\s+al[ıi]nam|ula[şs]am[ıi]yor|ula[şs][ıi]lam[ıi]yor)",
+    flags=re.IGNORECASE,
+)
+INFO_REQUEST_RE = re.compile(
+    r"(g[oö]ren|duyan|bilen|bilgisi\s+olan|bilgi\s+alan|haber\s+alan|ula[şs]s[ıi]n|yazs[ıi]n|bildirsin)",
+    flags=re.IGNORECASE,
+)
+INFO_CONTACT_RE = re.compile(r"(ileti[şs]im|irtibat|telefon|numara|0\d{10}|05\d{9})", flags=re.IGNORECASE)
+INFO_ANNOUNCEMENT_RE = re.compile(
+    r"(duyuru|canl[ıi]\s+yay[ıi]n|transfer|da[ğg][ıi]t[ıi]m|ula[şs]t[ıi]r[ıi]ld[ıi]|bildirilsin)",
+    flags=re.IGNORECASE,
+)
 
 PROVINCE_CENTROID = {
     "Hatay": (36.2022, 36.1606),
@@ -241,6 +257,41 @@ def pretty_label(label: str) -> str:
     return LABEL_DISPLAY.get(label, label.replace("_", " "))
 
 
+def _info_postprocess_enabled() -> bool:
+    raw = os.getenv("AFETYONETIMI_DISABLE_INFO_POSTPROCESS", "")
+    return raw.strip().casefold() not in {"1", "true", "yes", "on"}
+
+
+def _normalize_rule_text(text: Any) -> str:
+    s = unicodedata.normalize("NFC", str(text or "")).casefold()
+    return " ".join(s.split())
+
+
+def _has_info_postprocess_signal(text: Any) -> bool:
+    t = _normalize_rule_text(text)
+    missing = bool(INFO_MISSING_RE.search(t))
+    request = bool(INFO_REQUEST_RE.search(t))
+    contact = bool(INFO_CONTACT_RE.search(t))
+    announcement = bool(INFO_ANNOUNCEMENT_RE.search(t))
+    return (missing and request) or (missing and contact) or (request and contact) or announcement
+
+
+def _apply_info_v1_postprocess(df: pd.DataFrame) -> pd.DataFrame:
+    if not _info_postprocess_enabled():
+        return df
+    required = {"tweet_clean", "prob_bilgi_paylasimi", "pred_bilgi_paylasimi"}
+    if not required.issubset(df.columns):
+        return df
+    prob = pd.to_numeric(df["prob_bilgi_paylasimi"], errors="coerce").fillna(0.0)
+    pred = pd.to_numeric(df["pred_bilgi_paylasimi"], errors="coerce").fillna(0).astype(int)
+    signal = df["tweet_clean"].map(_has_info_postprocess_signal)
+    added = (pred == 0) & (prob >= INFO_POSTPROCESS_MIN_PROB) & signal
+    if bool(added.any()):
+        df.loc[added, "pred_bilgi_paylasimi"] = 1
+    df["postprocess_info_v1_added"] = added.astype(int)
+    return df
+
+
 def canonical_limitations(metadata: dict[str, Any] | None) -> list[str]:
     overlap_note = None
     if metadata and isinstance(metadata.get("content_overlap_audit_artifact"), dict):
@@ -307,15 +358,17 @@ def load_predictions_csv(path_str: str) -> pd.DataFrame:
         elif column.startswith("prob_"):
             df[column] = pd.to_numeric(df[column], errors="coerce")
 
-    if "pred_label_count" in df.columns:
-        df["pred_label_count"] = pd.to_numeric(df["pred_label_count"], errors="coerce").fillna(0).astype(int)
-    elif pred_columns:
-        df["pred_label_count"] = df[pred_columns].sum(axis=1).astype(int)
+    df = _apply_info_v1_postprocess(df)
 
-    if "pred_any_need" in df.columns:
-        df["pred_any_need"] = pd.to_numeric(df["pred_any_need"], errors="coerce").fillna(0).astype(int)
+    if pred_columns:
+        df["pred_label_count"] = df[pred_columns].sum(axis=1).astype(int)
     elif "pred_label_count" in df.columns:
+        df["pred_label_count"] = pd.to_numeric(df["pred_label_count"], errors="coerce").fillna(0).astype(int)
+
+    if "pred_label_count" in df.columns:
         df["pred_any_need"] = (df["pred_label_count"] > 0).astype(int)
+    elif "pred_any_need" in df.columns:
+        df["pred_any_need"] = pd.to_numeric(df["pred_any_need"], errors="coerce").fillna(0).astype(int)
 
     return df
 
