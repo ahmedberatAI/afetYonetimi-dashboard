@@ -42,6 +42,30 @@ pip install -r requirements.txt
 streamlit run dashboard/app.py
 ```
 
+## Local Web App (React + FastAPI)
+
+Streamlit arayuzune paralel, sadece localde kosan yeni web uygulamasi
+`webapp/` altindadir. Backend FastAPI, frontend Vite + React + TypeScript ile
+kuruldu.
+
+Ilk kurulum:
+
+```powershell
+python -m pip install -r webapp/backend/requirements.txt
+Set-Location webapp/frontend
+npm install
+Set-Location ../..
+```
+
+Calistirma:
+
+```powershell
+.\webapp\start-local.ps1
+```
+
+Arayuz `http://127.0.0.1:5173`, API dokumani
+`http://127.0.0.1:8787/api/docs` uzerinden acilir.
+
 ## Stand / Sunum Modu
 
 Dashboard varsayilan olarak stand modunda acilir: teknik sidebar, yerel dosya

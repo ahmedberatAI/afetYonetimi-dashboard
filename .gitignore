@@ -21,3 +21,7 @@ data/predictions/need_predictions_geolocated_v2_final.meta.json
 # Streamlit
 .streamlit/secrets.toml
 
+# Local React web app
+webapp/frontend/node_modules/
+webapp/frontend/dist/
+
