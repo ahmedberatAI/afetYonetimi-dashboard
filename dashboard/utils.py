@@ -24,7 +24,6 @@ DEFAULT_LABELS = [
 
 CANONICAL_CSV_NAME = "need_predictions_geolocated_v2_final.csv"
 CANONICAL_META_NAME = "need_predictions_geolocated_v2_final.meta.json"
-HISTORICAL_CSV_NAME = "need_predictions_geolocated_63k.csv"
 UNKNOWN_LOCATION_VALUES = {"", "na", "n/a", "nan", "none", "null", "unknown", "<na>"}
 MOJIBAKE_TOKENS = ("\u00c3", "\u00c4", "\u00c5", "\u00e2", "\ufffd")
 
@@ -92,7 +91,6 @@ def discover_default_source() -> SourceDescriptor:
     repo_root = dashboard_repo_root()
     local_canonical_csv = repo_root / "data" / "predictions" / CANONICAL_CSV_NAME
     sibling_canonical_csv = sibling_model_repo_root() / "data" / "predictions" / CANONICAL_CSV_NAME
-    historical_csv = repo_root / "data" / "predictions" / HISTORICAL_CSV_NAME
 
     env_csv = os.getenv("AFETYONETIMI_CANONICAL_PREDICTIONS_CSV") or os.getenv("AFETYONETIMI_PREDICTIONS_CSV")
     env_meta = os.getenv("AFETYONETIMI_CANONICAL_PREDICTIONS_META") or os.getenv("AFETYONETIMI_PREDICTIONS_META")
@@ -127,13 +125,6 @@ def discover_default_source() -> SourceDescriptor:
                 label="Canonical final (sibling project repo)",
                 note="Yan modelleme reposundan otomatik algılandı.",
             ),
-            SourceDescriptor(
-                csv_path=historical_csv,
-                meta_path=infer_meta_path(historical_csv),
-                default_kind="historical",
-                label="Historical 63k preview",
-                note="Yalnızca fallback; canonical v2 final output bunun yerini aldı.",
-            ),
         ]
     )
 
@@ -148,8 +139,6 @@ def classify_prediction_source(csv_path: str | Path, metadata: dict[str, Any] | 
     name = Path(csv_path).name
     if metadata and bool(metadata.get("canonical")):
         return "canonical_final"
-    if name == HISTORICAL_CSV_NAME:
-        return "historical"
     if metadata:
         supersedes = {
             Path(item).name

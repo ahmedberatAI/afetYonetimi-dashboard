@@ -12,8 +12,6 @@ If the modeling repo sits next to this dashboard repo, the app auto-detects the 
 - `../afetYonetimi_colab/data/predictions/need_predictions_geolocated_v2_final.csv`
 - `../afetYonetimi_colab/data/predictions/need_predictions_geolocated_v2_final.meta.json`
 
-The old `need_predictions_geolocated_63k.csv` file is still readable, but it is shown as a historical preview artifact rather than a canonical output.
-
 ## Run locally
 
 ```powershell

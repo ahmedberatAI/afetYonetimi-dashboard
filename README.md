@@ -1,16 +1,12 @@
 # AfetYonetimi Dashboard (Streamlit)
 
-Bu repo, need-classification prediction ciktilarini Streamlit uzerinden incelemek icin kullanilan dashboard'u icerir. Dashboard artik historical `63k silver` preview yerine **canonical final v2** output'u tercih eder ve metadata/provenance bilgisini arayuzde gosterir.
+Bu repo, need-classification prediction ciktilarini Streamlit uzerinden incelemek icin kullanilan dashboard'u icerir. Dashboard **canonical final v2** output'u ve metadata/provenance bilgisini arayuzde gosterir.
 
-## Canonical vs Historical
+## Canonical Output
 
 - Canonical final output:
   - `need_predictions_geolocated_v2_final.csv`
   - `need_predictions_geolocated_v2_final.meta.json`
-- Historical preview artifact:
-  - `need_predictions_geolocated_63k.csv`
-
-Historical `63k` dosyasi repo icinde tutulsa da canonical olarak gosterilmez. Dashboard canonical source bulunamazsa bunu acik bir fallback olarak etiketler.
 
 ## Default Source Resolution
 
@@ -23,8 +19,6 @@ Dashboard su sirayla predictions kaynagi arar:
 3. Sibling modeling repo canonical output:
    - `../afetYonetimi_colab/data/predictions/need_predictions_geolocated_v2_final.csv`
    - `../afetYonetimi_colab/data/predictions/need_predictions_geolocated_v2_final.meta.json`
-4. Historical fallback:
-   - `data/predictions/need_predictions_geolocated_63k.csv`
 
 ## Metadata Support
 
